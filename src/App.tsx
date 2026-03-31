@@ -13,10 +13,25 @@ import {
 import { runActionDesk } from "./app/runActionDesk";
 import { EmailDetail } from "./components/EmailDetail";
 import { InboxQueue } from "./components/InboxQueue";
+import { deriveIssueType, getIssueTypeLabel, type IssueType } from "./domain/issueType";
 import { generateReply } from "./services/generateReply";
 import { loadInboxQueue } from "./services/loadInboxQueue";
 import { getCachedProcessedEmail, setCachedProcessedEmail } from "./services/processedEmailCache";
 import type { EmailItem, IntentCode, ProcessedEmail } from "./types/actionDesk";
+
+type TopIssue = {
+  code: IssueType;
+  label: string;
+  count: number;
+};
+
+function getIssueCode(item: ProcessedEmail): IssueType | null {
+  if (item.status !== "processed" || !item.result) {
+    return null;
+  }
+
+  return deriveIssueType(item.result.analysis, item.result.orderContext);
+}
 
 export default function App() {
   const [queueItems, setQueueItems] = useState<ProcessedEmail[]>([]);
@@ -38,6 +53,7 @@ export default function App() {
   const [urgencyFilter, setUrgencyFilter] = useState<"all" | "high" | "medium" | "low">("all");
   const [intentFilter, setIntentFilter] = useState<IntentCode | "all">("all");
   const [showProblemsOnly, setShowProblemsOnly] = useState(false);
+  const [activeIssueFilter, setActiveIssueFilter] = useState<TopIssue["code"] | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
   const copyFeedbackTimeoutRef = useRef<number | null>(null);
   const isMountedRef = useRef(true);
@@ -395,11 +411,17 @@ export default function App() {
     urgency: urgencyFilter,
     intent: intentFilter,
   });
-  const visibleQueueItems = showProblemsOnly
-    ? filteredQueueItems.filter(
-        (item) => item.status === "processed" && (item.result?.priorityScore ?? 0) >= 70,
-      )
-    : filteredQueueItems;
+  const visibleQueueItems = filteredQueueItems.filter((item) => {
+    if (showProblemsOnly && (item.status !== "processed" || (item.result?.priorityScore ?? 0) < 70)) {
+      return false;
+    }
+
+    if (activeIssueFilter && getIssueCode(item) !== activeIssueFilter) {
+      return false;
+    }
+
+    return true;
+  });
   const queueSummary = {
     totalLoaded: queueItems.length,
     highPriority: queueItems.filter(
@@ -408,6 +430,25 @@ export default function App() {
     failed: queueItems.filter((item) => item.status === "failed").length,
     processing: queueItems.filter((item) => item.status === "pending").length,
   };
+  const topIssues = Array.from(
+    queueItems.reduce((counts, item) => {
+      const issueCode = getIssueCode(item);
+
+      if (!issueCode || item.status !== "processed" || !item.result || item.result.priorityScore < 70) {
+        return counts;
+      }
+
+      counts.set(issueCode, (counts.get(issueCode) ?? 0) + 1);
+      return counts;
+    }, new Map<TopIssue["code"], number>()),
+  )
+    .map(([code, count]) => ({
+      code,
+      label: getIssueTypeLabel(code),
+      count,
+    }))
+    .sort((left, right) => right.count - left.count || left.label.localeCompare(right.label))
+    .slice(0, 3);
   const selectedItem = visibleQueueItems.find((item) => item.email.id === selectedEmailId);
   const selectedReplyDraft = selectedItem?.result?.replyDraft.trim() ?? "";
   const hasReplyDraft = selectedReplyDraft.length > 0;
@@ -415,7 +456,8 @@ export default function App() {
     searchQuery.trim().length > 0 ||
     urgencyFilter !== "all" ||
     intentFilter !== "all" ||
-    showProblemsOnly;
+    showProblemsOnly ||
+    activeIssueFilter !== null;
 
   useEffect(() => {
     if (visibleQueueItems.length === 0) {
@@ -566,6 +608,8 @@ export default function App() {
             items={visibleQueueItems}
             totalCount={queueItems.length}
             summary={queueSummary}
+            topIssues={topIssues}
+            activeIssueFilter={activeIssueFilter}
             selectedEmailId={selectedEmailId}
             hasActiveFilters={hasActiveFilters}
             showProblemsOnly={showProblemsOnly}
@@ -583,6 +627,10 @@ export default function App() {
             retryingEmailId={retryingEmailId ?? undefined}
             onRetryEmail={handleRetryEmail}
             onToggleProblemsOnly={() => setShowProblemsOnly((current) => !current)}
+            onIssueFilterChange={(issueCode) => {
+              setActiveIssueFilter((current) => (current === issueCode ? null : issueCode));
+            }}
+            onClearIssueFilter={() => setActiveIssueFilter(null)}
             onSelectEmail={(emailId) => {
               setSelectedEmailId(emailId);
               setCopyFeedback("idle");

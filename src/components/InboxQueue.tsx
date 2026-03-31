@@ -1,6 +1,12 @@
 import { getIntentLabel } from "../services/analysisTaxonomy";
 import type { IntentCode, ProcessedEmail } from "../types/actionDesk";
 
+type IssueFilterCode =
+  | "delivered_not_received"
+  | "delayed_shipment"
+  | "missing_order"
+  | "general_issue";
+
 type InboxQueueProps = {
   items: ProcessedEmail[];
   totalCount: number;
@@ -10,6 +16,12 @@ type InboxQueueProps = {
     failed: number;
     processing: number;
   };
+  topIssues: Array<{
+    code: IssueFilterCode;
+    label: string;
+    count: number;
+  }>;
+  activeIssueFilter: IssueFilterCode | null;
   selectedEmailId?: string;
   hasActiveFilters: boolean;
   showProblemsOnly: boolean;
@@ -27,6 +39,8 @@ type InboxQueueProps = {
   retryingEmailId?: string;
   onRetryEmail: (emailId: string) => void;
   onToggleProblemsOnly: () => void;
+  onIssueFilterChange: (issueCode: IssueFilterCode) => void;
+  onClearIssueFilter: () => void;
   onSelectEmail: (emailId: string) => void;
   onSearchQueryChange: (value: string) => void;
   onUrgencyFilterChange: (value: "all" | "high" | "medium" | "low") => void;
@@ -136,6 +150,8 @@ export function InboxQueue({
   items,
   totalCount,
   summary,
+  topIssues,
+  activeIssueFilter,
   selectedEmailId,
   hasActiveFilters,
   showProblemsOnly,
@@ -153,6 +169,8 @@ export function InboxQueue({
   retryingEmailId,
   onRetryEmail,
   onToggleProblemsOnly,
+  onIssueFilterChange,
+  onClearIssueFilter,
   onSelectEmail,
   onSearchQueryChange,
   onUrgencyFilterChange,
@@ -247,6 +265,33 @@ export function InboxQueue({
 
   const listStyle: React.CSSProperties = {
     display: "grid",
+  };
+
+  const topIssuesPanelStyle: React.CSSProperties = {
+    padding: "14px 20px",
+    borderBottom: "1px solid #e5edf5",
+    backgroundColor: "#f8fafc",
+  };
+
+  const topIssuesRowStyle: React.CSSProperties = {
+    display: "flex",
+    flexWrap: "wrap",
+    gap: "8px",
+    marginTop: "10px",
+  };
+
+  const topIssueBadgeStyle: React.CSSProperties = {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: "6px",
+    border: "1px solid #dbe5f0",
+    borderRadius: "999px",
+    padding: "6px 10px",
+    backgroundColor: "#ffffff",
+    fontSize: "12px",
+    fontWeight: 700,
+    color: "#334155",
+    cursor: "pointer",
   };
 
   const summaryBarStyle: React.CSSProperties = {
@@ -390,6 +435,53 @@ export function InboxQueue({
       </div>
 
       <div style={listStyle}>
+        <div style={topIssuesPanelStyle}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: "12px", alignItems: "center", flexWrap: "wrap" }}>
+            <p style={{ ...summaryLabelStyle, fontSize: "12px" }}>Top Issues</p>
+            <button
+              type="button"
+              onClick={onClearIssueFilter}
+              disabled={activeIssueFilter === null}
+              style={{
+                border: "none",
+                background: "transparent",
+                color: activeIssueFilter ? "#1d4ed8" : "#94a3b8",
+                fontSize: "12px",
+                fontWeight: 700,
+                cursor: activeIssueFilter ? "pointer" : "default",
+                padding: 0,
+              }}
+            >
+              All Issues
+            </button>
+          </div>
+          {topIssues.length > 0 ? (
+            <div style={topIssuesRowStyle}>
+              {topIssues.map((issue) => (
+                <button
+                  key={issue.code}
+                  type="button"
+                  onClick={() => onIssueFilterChange(issue.code)}
+                  aria-pressed={activeIssueFilter === issue.code}
+                  style={{
+                    ...topIssueBadgeStyle,
+                    backgroundColor: activeIssueFilter === issue.code ? "#dbeafe" : "#ffffff",
+                    borderColor: activeIssueFilter === issue.code ? "#93c5fd" : "#dbe5f0",
+                    color: activeIssueFilter === issue.code ? "#1d4ed8" : "#334155",
+                  }}
+                >
+                  {issue.label}
+                  <span style={{ color: "#64748b" }}>
+                    ({issue.count} {issue.count === 1 ? "email" : "emails"})
+                  </span>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <p style={{ ...subtitleStyle, marginTop: "8px" }}>No urgent issues right now.</p>
+          )}
+        </div>
+
         <div style={summaryBarStyle}>
           <div style={summaryCardStyle}>
             <p style={summaryLabelStyle}>Total Loaded</p>

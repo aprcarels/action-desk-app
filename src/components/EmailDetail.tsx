@@ -1,3 +1,8 @@
+import {
+  deriveIssueType,
+  getIssueTypeDraftExplanation,
+  getIssueTypeLabel,
+} from "../domain/issueType";
 import { getIntentLabel, getRiskLabel } from "../services/analysisTaxonomy";
 import type { ProcessedEmail } from "../types/actionDesk";
 
@@ -201,6 +206,8 @@ export function EmailDetail({
     );
   }
 
+  const draftIssueType = deriveIssueType(item.result.analysis, item.result.orderContext);
+
   return (
     <div style={panelStyle}>
       <div style={sectionStyle}>
@@ -372,6 +379,23 @@ export function EmailDetail({
                   : "Copy Reply"}
             </button>
           </div>
+        </div>
+        <div
+          style={{
+            marginBottom: "12px",
+            border: "1px solid #e2e8f0",
+            borderRadius: "12px",
+            backgroundColor: "#f8fafc",
+            padding: "12px 14px",
+          }}
+        >
+          <p style={{ ...textStyle, fontSize: "12px", fontWeight: 700, color: "#64748b" }}>
+            Why this draft?
+          </p>
+          <p style={{ ...textStyle, marginTop: "4px" }}>
+            <strong>{getIssueTypeLabel(draftIssueType)}:</strong>{" "}
+            {getIssueTypeDraftExplanation(draftIssueType)}
+          </p>
         </div>
         <pre style={bodyBlockStyle}>{item.result.replyDraft || "No draft reply available."}</pre>
         {copyFeedback === "error" && (
