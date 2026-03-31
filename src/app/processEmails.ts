@@ -1,16 +1,25 @@
 import { runActionDesk } from "./runActionDesk";
-import type { ActionDeskResult, EmailItem, ProcessedEmail } from "../types/actionDesk";
-
-const urgencyRank: Record<ProcessedEmail["result"]["analysis"]["urgency"], number> = {
-  high: 0,
-  medium: 1,
-  low: 2,
-};
+import type {
+  ActionDeskResult,
+  EmailItem,
+  IntentCode,
+  ProcessedEmail,
+} from "../types/actionDesk";
 
 export type QueueFilters = {
   searchQuery: string;
   urgency: "all" | "high" | "medium" | "low";
-  intent: string;
+  intent: IntentCode | "all";
+};
+
+type ProcessEmailsProgressivelyOptions = {
+  onItemProcessed?: (item: ProcessedEmail) => void;
+};
+
+export type ProcessEmailsProgressivelyResult = {
+  processedItems: ProcessedEmail[];
+  processedCount: number;
+  failedCount: number;
 };
 
 export function buildPreviewText(result: ActionDeskResult, email: EmailItem): string {
@@ -26,19 +35,58 @@ export function buildPreviewText(result: ActionDeskResult, email: EmailItem): st
 export function createProcessedEmail(email: EmailItem, result: ActionDeskResult): ProcessedEmail {
   return {
     email,
+    status: "processed",
     result,
     issueCount: result.analysis.risks.length,
     previewText: buildPreviewText(result, email),
   };
 }
 
+export function createFailedProcessedEmail(
+  email: EmailItem,
+  processingError = "This email could not be processed.",
+): ProcessedEmail {
+  return {
+    email,
+    status: "failed",
+    processingError,
+    issueCount: 0,
+    previewText: email.body.replace(/\s+/g, " ").trim(),
+  };
+}
+
+export function createPendingProcessedEmail(email: EmailItem): ProcessedEmail {
+  return {
+    email,
+    status: "pending",
+    issueCount: 0,
+    previewText: email.body.replace(/\s+/g, " ").trim(),
+  };
+}
+
+function getProcessingErrorMessage(): string {
+  return "This email could not be analyzed. Try retrying it.";
+}
+
 export function sortProcessedEmails(items: ProcessedEmail[]): ProcessedEmail[] {
   return [...items].sort((left, right) => {
-    const urgencyDifference =
-      urgencyRank[left.result.analysis.urgency] - urgencyRank[right.result.analysis.urgency];
+    const statusRank: Record<ProcessedEmail["status"], number> = {
+      processed: 0,
+      pending: 1,
+      failed: 2,
+    };
+    const statusDifference = statusRank[left.status] - statusRank[right.status];
 
-    if (urgencyDifference !== 0) {
-      return urgencyDifference;
+    if (statusDifference !== 0) {
+      return statusDifference;
+    }
+
+    if (left.status === "processed" && right.status === "processed") {
+      const priorityDifference = (right.result?.priorityScore ?? 0) - (left.result?.priorityScore ?? 0);
+
+      if (priorityDifference !== 0) {
+        return priorityDifference;
+      }
     }
 
     return (
@@ -55,9 +103,11 @@ export function filterProcessedEmails(
 
   return items.filter((item) => {
     const matchesUrgency =
-      filters.urgency === "all" || item.result.analysis.urgency === filters.urgency;
+      filters.urgency === "all" ||
+      (item.status === "processed" && item.result?.analysis.urgency === filters.urgency);
     const matchesIntent =
-      filters.intent === "all" || item.result.analysis.intent === filters.intent;
+      filters.intent === "all" ||
+      (item.status === "processed" && item.result?.analysis.intent === filters.intent);
     const matchesSearch =
       query.length === 0 ||
       item.email.senderName.toLowerCase().includes(query) ||
@@ -67,10 +117,14 @@ export function filterProcessedEmails(
   });
 }
 
-export function getIntentOptions(items: ProcessedEmail[]): string[] {
-  return Array.from(new Set(items.map((item) => item.result.analysis.intent))).sort((left, right) =>
-    left.localeCompare(right),
-  );
+export function getIntentOptions(items: ProcessedEmail[]): IntentCode[] {
+  return Array.from(
+    new Set(
+      items.flatMap((item) =>
+        item.status === "processed" && item.result ? [item.result.analysis.intent] : [],
+      ),
+    ),
+  ).sort((left, right) => left.localeCompare(right));
 }
 
 export function refreshProcessedEmail(
@@ -85,6 +139,34 @@ export function refreshProcessedEmail(
   );
 }
 
+export function refreshProcessedEmailReplyDraft(
+  items: ProcessedEmail[],
+  emailId: string,
+  replyDraft: string,
+): ProcessedEmail[] {
+  return items.map((item) =>
+    item.email.id === emailId && item.result
+      ? {
+          ...item,
+          result: {
+            ...item.result,
+            replyDraft,
+          },
+        }
+      : item,
+  );
+}
+
+export function replaceProcessedEmail(
+  items: ProcessedEmail[],
+  emailId: string,
+  nextItem: ProcessedEmail,
+): ProcessedEmail[] {
+  return sortProcessedEmails(
+    items.map((item) => (item.email.id === emailId ? nextItem : item)),
+  );
+}
+
 export async function processEmails(emails: EmailItem[]): Promise<ProcessedEmail[]> {
   const settledItems = await Promise.allSettled(
     emails.map(async (email) => {
@@ -94,13 +176,54 @@ export async function processEmails(emails: EmailItem[]): Promise<ProcessedEmail
     }),
   );
 
-  const processedItems = settledItems.flatMap((item) =>
-    item.status === "fulfilled" ? [item.value] : [],
+  const processedItems = settledItems.map((item, index) =>
+    item.status === "fulfilled"
+      ? item.value
+      : createFailedProcessedEmail(emails[index], getProcessingErrorMessage()),
   );
 
-  if (processedItems.length === 0) {
+  if (emails.length > 0 && processedItems.length === 0) {
     throw new Error("No inbox emails could be processed.");
   }
 
   return sortProcessedEmails(processedItems);
+}
+
+export async function processEmailsProgressively(
+  emails: EmailItem[],
+  options?: ProcessEmailsProgressivelyOptions,
+): Promise<ProcessEmailsProgressivelyResult> {
+  const processedItems: ProcessedEmail[] = [];
+  let processedCount = 0;
+  let failedCount = 0;
+
+  await Promise.all(
+    emails.map(async (email) => {
+      try {
+        const result = await runActionDesk(email.body);
+        const processedItem = createProcessedEmail(email, result);
+
+        processedCount += 1;
+        processedItems.push(processedItem);
+        options?.onItemProcessed?.(processedItem);
+      } catch {
+        const failedItem = createFailedProcessedEmail(email, getProcessingErrorMessage());
+        failedCount += 1;
+        processedItems.push(failedItem);
+        options?.onItemProcessed?.(failedItem);
+      }
+    }),
+  );
+
+  const sortedItems = sortProcessedEmails(processedItems);
+
+  if (emails.length > 0 && sortedItems.length === 0) {
+    throw new Error("No inbox emails could be processed.");
+  }
+
+  return {
+    processedItems: sortedItems,
+    processedCount,
+    failedCount,
+  };
 }

@@ -1,20 +1,39 @@
 import type { EmailAnalysis } from "../types/actionDesk";
+import { normalizeIntent, normalizeRisks } from "./analysisTaxonomy";
 
 export function parseAnalysisResponse(raw: string): EmailAnalysis | null {
   try {
     const parsed: unknown = JSON.parse(raw);
 
-    if (!isEmailAnalysis(parsed)) {
+    if (!isParsedEmailAnalysis(parsed)) {
       return null;
     }
 
-    return parsed;
+    return {
+      summary: parsed.summary,
+      intent: normalizeIntent(parsed.intent),
+      urgency: parsed.urgency,
+      confidence: parsed.confidence,
+      orderNumber: parsed.orderNumber ?? undefined,
+      risks: normalizeRisks(parsed.risks),
+      nextAction: parsed.nextAction,
+    };
   } catch {
     return null;
   }
 }
 
-function isEmailAnalysis(value: unknown): value is EmailAnalysis {
+type ParsedEmailAnalysis = {
+  summary: string;
+  intent: string;
+  urgency: EmailAnalysis["urgency"];
+  confidence: EmailAnalysis["confidence"];
+  orderNumber?: string | null;
+  risks: string[];
+  nextAction: string;
+};
+
+function isParsedEmailAnalysis(value: unknown): value is ParsedEmailAnalysis {
   if (!isRecord(value)) {
     return false;
   }

@@ -19,7 +19,7 @@ export function generateReply(
 
   const acknowledgesMissingDelivery =
     order.shipmentStatus === "Delivered" &&
-    analysis.risks.some((risk) => risk.includes("not received"));
+    analysis.risks.includes("delivered_not_received");
 
   const openingLine = analysis.risks.length > 0
     ? "I understand your concern, and I appreciate your patience."

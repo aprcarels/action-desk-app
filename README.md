@@ -1,73 +1,57 @@
-# React + TypeScript + Vite
+# Action Desk
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Action Desk is a frontend-only Inbox Queue MVP for support email triage. The app processes seeded customer emails into a queue and gives a support rep a concise summary, normalized intent and issues, a recommended next action, and a draft reply.
 
-Currently, two official plugins are available:
+## Current MVP
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+- Progressive inbox queue rendering
+- Search and filtering by urgency and intent
+- Detail panel with customer email, analysis, recommended action, and reply draft
+- Copy reply workflow
+- Regenerate reply workflow for the selected email
+- Mock order lookup for realistic shipping and support scenarios
 
-## React Compiler
+## Active App Surface
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+- Main browser app entry: [src/main.tsx](src/main.tsx)
+- Main app shell: [src/App.tsx](src/App.tsx)
+- Inbox queue UI: [src/components/InboxQueue.tsx](src/components/InboxQueue.tsx)
+- Detail panel UI: [src/components/EmailDetail.tsx](src/components/EmailDetail.tsx)
+- Email processing boundary: [src/app/processEmails.ts](src/app/processEmails.ts)
+- Single-email orchestration: [src/app/runActionDesk.ts](src/app/runActionDesk.ts)
+- Demo inbox seed data: [src/data/mockEmails.ts](src/data/mockEmails.ts)
 
-## Expanding the ESLint configuration
+## Demo Scenarios Covered
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+- Where is my order
+- Delivered but not received
+- Proof of delivery request
+- Cancellation request
+- Short shipment
+- Damaged shipment
+- Billing question
+- Address change
+- Duplicate shipment concern
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+## Non-Core Files Still In Repo
 
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
+These are intentionally left in place because they may still be useful for local add-in testing, but they are not required for the core Inbox Queue MVP demo:
 
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
+- [outlook-addin/manifest.xml](outlook-addin/manifest.xml)
+- [taskpane.html](taskpane.html)
+- [src/taskpane.tsx](src/taskpane.tsx)
+- [src/TaskPaneApp.tsx](src/TaskPaneApp.tsx)
+- [src/office/getOutlookShellContext.ts](src/office/getOutlookShellContext.ts)
+- [src/office/useOutlookShellContext.ts](src/office/useOutlookShellContext.ts)
+- [src/office/office.d.ts](src/office/office.d.ts)
+- [certs/localhost.pem](certs/localhost.pem)
+- [certs/localhost-key.pem](certs/localhost-key.pem)
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+If the project is later narrowed to a browser-only Inbox Queue demo, those files are good archive candidates.
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+## Development
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+npm run build
+npm run lint
 ```

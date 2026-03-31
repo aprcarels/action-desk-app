@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type { ServerOptions } from "node:https";
+import { getMockInboxPage } from "./src/mocks/mockInboxApi";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
@@ -18,8 +19,63 @@ const httpsConfig: ServerOptions = {
   cert: readFileSync(certPath),
 };
 
+function handleMockInboxRequest(requestUrl: string) {
+  const url = new URL(requestUrl, "https://localhost");
+  const cursor = url.searchParams.get("cursor") ?? undefined;
+  const rawLimit = url.searchParams.get("limit");
+  const parsedLimit = rawLimit ? Number.parseInt(rawLimit, 10) : undefined;
+  const limit = parsedLimit !== undefined && Number.isNaN(parsedLimit) ? undefined : parsedLimit;
+
+  return getMockInboxPage({ cursor, limit });
+}
+
+function mockInboxApiPlugin() {
+  const routeHandler = (req: { method?: string; url?: string }, res: {
+    statusCode: number;
+    setHeader(name: string, value: string): void;
+    end(chunk?: string): void;
+  }, next: () => void) => {
+    if (req.method !== "GET" || !req.url) {
+      next();
+      return;
+    }
+
+    const url = new URL(req.url, "https://localhost");
+
+    if (url.pathname !== "/api/inbox") {
+      next();
+      return;
+    }
+
+    try {
+      const payload = handleMockInboxRequest(req.url);
+      res.statusCode = 200;
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify(payload));
+    } catch {
+      res.statusCode = 500;
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ error: "Mock inbox route failed." }));
+    }
+  };
+
+  return {
+    name: "mock-inbox-api",
+    configureServer(server: {
+      middlewares: { use(handler: typeof routeHandler): void };
+    }) {
+      server.middlewares.use(routeHandler);
+    },
+    configurePreviewServer(server: {
+      middlewares: { use(handler: typeof routeHandler): void };
+    }) {
+      server.middlewares.use(routeHandler);
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), mockInboxApiPlugin()],
   server: {
     host: "localhost",
     port: 5173,

@@ -19,6 +19,12 @@ const mockOrders: Record<string, OrderContext> = {
     shipmentStatus: "Exception",
     lastUpdated: "2026-03-29T16:40:00Z",
   },
+  "ORD-1004": {
+    orderNumber: "ORD-1004",
+    status: "Delivered",
+    shipmentStatus: "Delivered",
+    lastUpdated: "2026-03-30T14:18:00Z",
+  },
   "ORD-1005": {
     orderNumber: "ORD-1005",
     status: "Delivered",

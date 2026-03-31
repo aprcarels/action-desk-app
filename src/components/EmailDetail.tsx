@@ -1,7 +1,9 @@
+import { getIntentLabel, getRiskLabel } from "../services/analysisTaxonomy";
 import type { ProcessedEmail } from "../types/actionDesk";
 
 type EmailDetailProps = {
   item?: ProcessedEmail;
+  hasReplyDraft: boolean;
   copyFeedback: "idle" | "success" | "error";
   regeneratingReply: boolean;
   replyActionError: string | null;
@@ -18,8 +20,32 @@ function formatReceivedTime(receivedAt: string) {
   });
 }
 
+function getPriorityLabel(priorityScore: number): "High" | "Medium" | "Low" {
+  if (priorityScore >= 70) {
+    return "High";
+  }
+
+  if (priorityScore >= 40) {
+    return "Medium";
+  }
+
+  return "Low";
+}
+
+function formatPriorityBreakdownLabel(label: string) {
+  if (!label.startsWith("Risk: ")) {
+    return label;
+  }
+
+  const riskCode = label.slice("Risk: ".length) as NonNullable<
+    ProcessedEmail["result"]
+  >["analysis"]["risks"][number];
+  return `Risk: ${getRiskLabel(riskCode)}`;
+}
+
 export function EmailDetail({
   item,
+  hasReplyDraft,
   copyFeedback,
   regeneratingReply,
   replyActionError,
@@ -117,6 +143,64 @@ export function EmailDetail({
     );
   }
 
+  if (item.status === "failed") {
+    return (
+      <div style={panelStyle}>
+        <div style={sectionStyle}>
+          <h2 style={titleStyle}>{item.email.subject}</h2>
+          <p style={{ ...textStyle, marginTop: "8px" }}>
+            <strong>Sender:</strong> {item.email.senderName} ({item.email.senderEmail})
+          </p>
+          <p style={textStyle}>
+            <strong>Received:</strong> {formatReceivedTime(item.email.receivedAt)}
+          </p>
+        </div>
+
+        <div style={sectionCardStyle}>
+          <h3 style={sectionTitleStyle}>Processing Status</h3>
+          <p style={{ ...textStyle, color: "#991b1b" }}>
+            {item.processingError ?? "This email could not be processed."}
+          </p>
+        </div>
+
+        <div style={sectionCardStyle}>
+          <h3 style={sectionTitleStyle}>Customer Email</h3>
+          <pre style={bodyBlockStyle}>
+            {item.email.body.trim() || "No email body available for this message."}
+          </pre>
+        </div>
+      </div>
+    );
+  }
+
+  if (item.status === "pending" || !item.result) {
+    return (
+      <div style={panelStyle}>
+        <div style={sectionStyle}>
+          <h2 style={titleStyle}>{item.email.subject}</h2>
+          <p style={{ ...textStyle, marginTop: "8px" }}>
+            <strong>Sender:</strong> {item.email.senderName} ({item.email.senderEmail})
+          </p>
+          <p style={textStyle}>
+            <strong>Received:</strong> {formatReceivedTime(item.email.receivedAt)}
+          </p>
+        </div>
+
+        <div style={sectionCardStyle}>
+          <h3 style={sectionTitleStyle}>Processing Status</h3>
+          <p style={textStyle}>This email is currently being processed.</p>
+        </div>
+
+        <div style={sectionCardStyle}>
+          <h3 style={sectionTitleStyle}>Customer Email</h3>
+          <pre style={bodyBlockStyle}>
+            {item.email.body.trim() || "No email body available for this message."}
+          </pre>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div style={panelStyle}>
       <div style={sectionStyle}>
@@ -153,7 +237,7 @@ export function EmailDetail({
         >
           <div>
             <p style={{ ...textStyle, fontWeight: 700 }}>Intent</p>
-            <p style={textStyle}>{item.result.analysis.intent || "Not identified"}</p>
+            <p style={textStyle}>{getIntentLabel(item.result.analysis.intent)}</p>
           </div>
           <div>
             <p style={{ ...textStyle, fontWeight: 700 }}>Urgency</p>
@@ -170,7 +254,7 @@ export function EmailDetail({
           <ul style={{ margin: 0, paddingLeft: "20px", color: "#334155" }}>
             {item.result.analysis.risks.map((risk) => (
               <li key={risk} style={{ marginBottom: "8px", lineHeight: 1.6 }}>
-                {risk}
+                {getRiskLabel(risk)}
               </li>
             ))}
           </ul>
@@ -186,6 +270,30 @@ export function EmailDetail({
             {item.result.analysis.nextAction || "Review the message and determine the next support step."}
           </p>
         </div>
+      </div>
+
+      <div style={sectionCardStyle}>
+        <h3 style={sectionTitleStyle}>Priority Debug</h3>
+        <p style={{ ...textStyle, marginBottom: "10px", color: "#64748b", fontSize: "12px" }}>
+          Internal scoring info for triage tuning.
+        </p>
+        <p style={textStyle}>
+          <strong>Priority:</strong> {getPriorityLabel(item.result.priorityScore)}
+        </p>
+        <p style={{ ...textStyle, marginBottom: "10px" }}>
+          <strong>Score:</strong> {item.result.priorityScore}
+        </p>
+        {item.result.priorityBreakdown && item.result.priorityBreakdown.length > 0 ? (
+          <ul style={{ margin: 0, paddingLeft: "20px", color: "#334155" }}>
+            {item.result.priorityBreakdown.map((entry, index) => (
+              <li key={`${entry.label}-${index}`} style={{ marginBottom: "8px", lineHeight: 1.6 }}>
+                {formatPriorityBreakdownLabel(entry.label)} (+{entry.points})
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p style={textStyle}>No priority breakdown available.</p>
+        )}
       </div>
 
       {item.result.orderContext && (
@@ -235,23 +343,29 @@ export function EmailDetail({
             <button
               type="button"
               onClick={onCopyReply}
+              disabled={!hasReplyDraft}
               style={{
                 ...secondaryButtonStyle,
-                backgroundColor:
-                  copyFeedback === "success"
+                backgroundColor: !hasReplyDraft
+                  ? "#e2e8f0"
+                  : copyFeedback === "success"
                     ? "#dcfce7"
                     : copyFeedback === "error"
                       ? "#fee2e2"
                       : "#ffffff",
-                color:
-                  copyFeedback === "success"
+                color: !hasReplyDraft
+                  ? "#64748b"
+                  : copyFeedback === "success"
                     ? "#166534"
                     : copyFeedback === "error"
                       ? "#991b1b"
                       : "#0f172a",
+                cursor: !hasReplyDraft ? "not-allowed" : "pointer",
               }}
             >
-              {copyFeedback === "success"
+              {!hasReplyDraft
+                ? "No Reply Draft"
+                : copyFeedback === "success"
                 ? "Copied!"
                 : copyFeedback === "error"
                   ? "Clipboard Unavailable"
