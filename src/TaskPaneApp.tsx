@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { runActionDesk } from "./app/runActionDesk";
 import { useOutlookShellContext } from "./office/useOutlookShellContext";
 import { getIntentLabel, getRiskLabel } from "./services/analysisTaxonomy";
+import { cleanEmailText } from "./services/cleanEmailText";
 import type { ActionDeskResult } from "./types/actionDesk";
 
 type TaskPaneState =
@@ -27,9 +28,10 @@ export default function TaskPaneApp() {
       return;
     }
 
+    const cleanedEmailBody = cleanEmailText(emailBody);
     const analysisInput = emailSubject
-      ? `Subject: ${emailSubject}\n\n${emailBody}`
-      : emailBody;
+      ? cleanEmailText(`Subject: ${emailSubject}\n\n${cleanedEmailBody}`)
+      : cleanedEmailBody;
 
     let isMounted = true;
 

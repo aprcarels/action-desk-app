@@ -6,6 +6,7 @@ import {
 } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { getMockRawInboxEmails } from "../src/mocks/mockInboxApi";
+import { cleanEmailText } from "../src/services/cleanEmailText";
 import type { EmailSourceListResult, RawInboxEmail } from "../src/types/inboxSource";
 
 type InboxImportPayload = {
@@ -76,7 +77,7 @@ function normalizeImportedEmail(payload: InboxImportPayload): RawInboxEmail {
     fromName: payload.fromName.trim(),
     fromEmail: payload.fromEmail.trim(),
     receivedAt: payload.receivedAt.trim(),
-    bodyText: payload.bodyText.trim(),
+    bodyText: cleanEmailText(payload.bodyText),
     provider: "outlook_addin_import",
   };
 }
