@@ -19,6 +19,8 @@ const httpsConfig: ServerOptions = {
   cert: readFileSync(certPath),
 };
 
+const GRAPH_BASE_URL = "https://graph.microsoft.com/v1.0";
+
 function handleMockInboxRequest(requestUrl: string) {
   const url = new URL(requestUrl, "https://localhost");
   const cursor = url.searchParams.get("cursor") ?? undefined;
@@ -49,6 +51,68 @@ async function readRequestBody(req: {
       reject(new Error("Request body could not be read."));
     });
   });
+}
+
+function isAllowedGraphRequest(method: string, pathWithQuery: string) {
+  if (method !== "GET") {
+    return false;
+  }
+
+  return /^\/me\/messages(?:\?.*)?$/i.test(pathWithQuery);
+}
+
+async function handleGraphProxyRequest(req: {
+  method?: string;
+  url?: string;
+  headers?: {
+    authorization?: string;
+    accept?: string;
+  };
+}, res: {
+  statusCode: number;
+  setHeader(name: string, value: string): void;
+  end(chunk?: string): void;
+}) {
+  if (!req.method || !req.url) {
+    res.statusCode = 400;
+    res.end("Invalid graph request.");
+    return;
+  }
+
+  const authorization = req.headers?.authorization;
+
+  if (!authorization?.startsWith("Bearer ")) {
+    res.statusCode = 401;
+    res.end("Missing bearer token.");
+    return;
+  }
+
+  const requestUrl = new URL(req.url, "https://localhost");
+  const graphPath = requestUrl.pathname.replace(/^\/api\/graph/i, "") || "/";
+  const pathWithQuery = `${graphPath}${requestUrl.search}`;
+
+  if (!isAllowedGraphRequest(req.method.toUpperCase(), pathWithQuery)) {
+    res.statusCode = 404;
+    res.end("Graph path is not enabled by this proxy.");
+    return;
+  }
+
+  const upstreamResponse = await fetch(`${GRAPH_BASE_URL}${pathWithQuery}`, {
+    method: req.method.toUpperCase(),
+    headers: {
+      Authorization: authorization,
+      Accept: req.headers?.accept ?? "application/json",
+    },
+  });
+
+  res.statusCode = upstreamResponse.status;
+  const contentType = upstreamResponse.headers.get("Content-Type");
+
+  if (contentType) {
+    res.setHeader("Content-Type", contentType);
+  }
+
+  res.end(await upstreamResponse.text());
 }
 
 function mockInboxApiPlugin() {
@@ -84,6 +148,17 @@ function mockInboxApiPlugin() {
       return;
     }
 
+    if (req.method === "GET" && url.pathname.startsWith("/api/graph")) {
+      try {
+        await handleGraphProxyRequest(req, res);
+      } catch {
+        res.statusCode = 502;
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ error: "Graph proxy request failed." }));
+      }
+      return;
+    }
+
     if (req.method === "POST" && url.pathname === "/api/inbox/import") {
       try {
         const rawBody = await readRequestBody(req);
@@ -101,7 +176,11 @@ function mockInboxApiPlugin() {
       return;
     }
 
-    if (url.pathname !== "/api/inbox" && url.pathname !== "/api/inbox/import") {
+    if (
+      url.pathname !== "/api/inbox" &&
+      url.pathname !== "/api/inbox/import" &&
+      !url.pathname.startsWith("/api/graph")
+    ) {
       next();
       return;
     }

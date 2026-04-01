@@ -1,3 +1,4 @@
+import { getAccessToken } from "../auth/getAccessToken";
 import type { EmailSourceListResult, RawInboxEmail } from "../types/inboxSource";
 
 type FetchInboxPageOptions = {
@@ -7,6 +8,29 @@ type FetchInboxPageOptions = {
 };
 
 const INVALID_INBOX_API_RESPONSE_ERROR = "Invalid inbox API response.";
+const GRAPH_INBOX_PAGE_SIZE = 25;
+
+type GraphMessage = {
+  id?: string;
+  conversationId?: string;
+  subject?: string;
+  receivedDateTime?: string;
+  bodyPreview?: string;
+  body?: {
+    content?: string;
+  };
+  from?: {
+    emailAddress?: {
+      name?: string;
+      address?: string;
+    };
+  };
+};
+
+type GraphMessagesResponse = {
+  value?: GraphMessage[];
+  "@odata.nextLink"?: string;
+};
 
 function isRawInboxEmail(value: unknown): value is RawInboxEmail {
   if (!value || typeof value !== "object") {
@@ -56,23 +80,81 @@ function normalizeInboxApiResponse(payload: unknown): EmailSourceListResult {
   };
 }
 
+function buildGraphMessagesPath(cursor?: string) {
+  if (cursor) {
+    return cursor.startsWith("/") ? cursor : `/${cursor}`;
+  }
+
+  const searchParams = new URLSearchParams({
+    "$top": String(GRAPH_INBOX_PAGE_SIZE),
+    "$orderby": "receivedDateTime desc",
+    "$select": "id,conversationId,subject,from,receivedDateTime,bodyPreview,body",
+  });
+
+  return `/me/messages?${searchParams.toString()}`;
+}
+
+function normalizeGraphNextCursor(nextLink?: string): string | undefined {
+  if (!nextLink) {
+    return undefined;
+  }
+
+  try {
+    const url = new URL(nextLink);
+    const graphPathPrefix = "/v1.0";
+    const normalizedPath = url.pathname.startsWith(graphPathPrefix)
+      ? url.pathname.slice(graphPathPrefix.length)
+      : url.pathname;
+
+    return `${normalizedPath}${url.search}`;
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizeGraphMessagesResponse(payload: unknown): EmailSourceListResult {
+  if (!payload || typeof payload !== "object") {
+    throw new Error(INVALID_INBOX_API_RESPONSE_ERROR);
+  }
+
+  const candidate = payload as GraphMessagesResponse;
+
+  if (!Array.isArray(candidate.value)) {
+    throw new Error(INVALID_INBOX_API_RESPONSE_ERROR);
+  }
+
+  const emails: RawInboxEmail[] = candidate.value.map((message) => ({
+    id: message.id ?? "",
+    threadId: message.conversationId,
+    subject: message.subject?.trim() || "(no subject)",
+    fromName: message.from?.emailAddress?.name?.trim() || "",
+    fromEmail: message.from?.emailAddress?.address?.trim() || "",
+    receivedAt: message.receivedDateTime ?? "",
+    bodyText: message.bodyPreview?.trim() || "",
+    bodyHtml: message.body?.content,
+    provider: "outlook_graph",
+  }));
+
+  const normalized = normalizeInboxApiResponse({
+    emails,
+    nextCursor: normalizeGraphNextCursor(candidate["@odata.nextLink"]),
+  });
+
+  return normalized;
+}
+
 export async function fetchInboxPage(
   options?: FetchInboxPageOptions,
 ): Promise<EmailSourceListResult> {
-  const url = new URL("/api/inbox", window.location.origin);
-
-  if (options?.cursor) {
-    url.searchParams.set("cursor", options.cursor);
-  }
-
-  if (typeof options?.limit === "number") {
-    url.searchParams.set("limit", String(options.limit));
-  }
+  const accessToken = await getAccessToken();
+  const graphPath = buildGraphMessagesPath(options?.cursor);
+  const url = new URL(`/api/graph${graphPath}`, window.location.origin);
 
   const response = await fetch(url, {
     method: "GET",
     headers: {
       Accept: "application/json",
+      Authorization: `Bearer ${accessToken}`,
     },
     signal: options?.signal,
   });
@@ -82,5 +164,5 @@ export async function fetchInboxPage(
   }
 
   const payload: unknown = await response.json();
-  return normalizeInboxApiResponse(payload);
+  return normalizeGraphMessagesResponse(payload);
 }

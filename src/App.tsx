@@ -25,6 +25,17 @@ type TopIssue = {
   count: number;
 };
 
+function getErrorMessage(
+  error: unknown,
+  fallbackMessage: string,
+): string {
+  if (error instanceof Error && error.message.trim().length > 0) {
+    return error.message;
+  }
+
+  return fallbackMessage;
+}
+
 function getIssueCode(item: ProcessedEmail): IssueType | null {
   if (item.status !== "processed" || !item.result) {
     return null;
@@ -199,11 +210,16 @@ export default function App() {
         }
 
         setProcessingStatus("Processing inbox emails and generating AI analysis.");
-      } catch {
+      } catch (error) {
         if (isMounted) {
           setQueueItems([]);
           setSelectedEmailId(undefined);
-          setInboxLoadError("We couldn't load the inbox right now. Please try again.");
+          setInboxLoadError(
+            getErrorMessage(
+              error,
+              "We couldn't load the inbox right now. Please try again.",
+            ),
+          );
           setProcessingStatus(null);
           setIsLoadingInbox(false);
         }
@@ -391,8 +407,13 @@ export default function App() {
       } else {
         setProcessingStatus(null);
       }
-    } catch {
-      setLoadMoreError("We couldn't load more emails right now. Please try again.");
+    } catch (error) {
+      setLoadMoreError(
+        getErrorMessage(
+          error,
+          "We couldn't load more emails right now. Please try again.",
+        ),
+      );
     } finally {
       setIsLoadingMore(false);
     }
