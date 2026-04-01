@@ -44,6 +44,7 @@ export type EmailItem = {
   subject: string;
   receivedAt: string;
   body: string;
+  source?: "seeded" | "outlook_import";
 };
 
 export type OrderContext = {

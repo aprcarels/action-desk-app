@@ -137,6 +137,18 @@ export function EmailDetail({
     cursor: "pointer",
   };
 
+  const sourceBadgeStyle: React.CSSProperties = {
+    display: "inline-flex",
+    alignItems: "center",
+    fontSize: "12px",
+    fontWeight: 700,
+    color: "#0f766e",
+    backgroundColor: "#ccfbf1",
+    borderRadius: "999px",
+    padding: "4px 8px",
+    marginTop: "8px",
+  };
+
   if (!item) {
     return (
       <div style={panelStyle}>
@@ -153,6 +165,9 @@ export function EmailDetail({
       <div style={panelStyle}>
         <div style={sectionStyle}>
           <h2 style={titleStyle}>{item.email.subject}</h2>
+          {item.email.source === "outlook_import" && (
+            <div style={sourceBadgeStyle}>Imported from Outlook</div>
+          )}
           <p style={{ ...textStyle, marginTop: "8px" }}>
             <strong>Sender:</strong> {item.email.senderName} ({item.email.senderEmail})
           </p>
@@ -183,6 +198,9 @@ export function EmailDetail({
       <div style={panelStyle}>
         <div style={sectionStyle}>
           <h2 style={titleStyle}>{item.email.subject}</h2>
+          {item.email.source === "outlook_import" && (
+            <div style={sourceBadgeStyle}>Imported from Outlook</div>
+          )}
           <p style={{ ...textStyle, marginTop: "8px" }}>
             <strong>Sender:</strong> {item.email.senderName} ({item.email.senderEmail})
           </p>
@@ -212,6 +230,9 @@ export function EmailDetail({
     <div style={panelStyle}>
       <div style={sectionStyle}>
         <h2 style={titleStyle}>{item.email.subject}</h2>
+        {item.email.source === "outlook_import" && (
+          <div style={sourceBadgeStyle}>Imported from Outlook</div>
+        )}
         <p style={{ ...textStyle, marginTop: "8px" }}>
           <strong>Sender:</strong> {item.email.senderName} ({item.email.senderEmail})
         </p>

@@ -57,6 +57,7 @@ export default function App() {
   const [reloadToken, setReloadToken] = useState(0);
   const copyFeedbackTimeoutRef = useRef<number | null>(null);
   const isMountedRef = useRef(true);
+  const lastFocusRefreshAtRef = useRef(0);
 
   function resetCopyFeedbackWithDelay(nextState: "success" | "error") {
     if (copyFeedbackTimeoutRef.current !== null) {
@@ -252,6 +253,30 @@ export default function App() {
       }
     };
   }, []);
+
+  useEffect(() => {
+    function handleWindowFocus() {
+      const now = Date.now();
+
+      if (
+        loading ||
+        isLoadingInbox ||
+        isLoadingMore ||
+        now - lastFocusRefreshAtRef.current < 5000
+      ) {
+        return;
+      }
+
+      lastFocusRefreshAtRef.current = now;
+      setReloadToken((current) => current + 1);
+    }
+
+    window.addEventListener("focus", handleWindowFocus);
+
+    return () => {
+      window.removeEventListener("focus", handleWindowFocus);
+    };
+  }, [loading, isLoadingInbox, isLoadingMore]);
 
   async function handleCopyReply() {
     if (!selectedItem || selectedItem.status !== "processed" || !hasReplyDraft) {

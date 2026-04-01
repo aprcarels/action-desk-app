@@ -9,5 +9,6 @@ export function mapRawInboxEmailToEmailItem(rawEmail: RawInboxEmail): EmailItem 
     subject: rawEmail.subject,
     receivedAt: rawEmail.receivedAt,
     body: rawEmail.bodyText,
+    source: rawEmail.provider === "outlook_addin_import" ? "outlook_import" : "seeded",
   };
 }

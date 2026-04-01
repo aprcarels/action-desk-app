@@ -1,0 +1,157 @@
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
+import { resolve, dirname } from "node:path";
+import { getMockRawInboxEmails } from "../src/mocks/mockInboxApi";
+import type { EmailSourceListResult, RawInboxEmail } from "../src/types/inboxSource";
+
+type InboxImportPayload = {
+  id: string;
+  subject: string;
+  bodyText: string;
+  fromName: string;
+  fromEmail: string;
+  receivedAt: string;
+};
+
+const DEFAULT_PAGE_SIZE = 6;
+const importedInboxFilePath = resolve(__dirname, "..", ".local-data", "imported-inbox.json");
+
+function ensureImportedInboxFile() {
+  const folderPath = dirname(importedInboxFilePath);
+
+  if (!existsSync(folderPath)) {
+    mkdirSync(folderPath, { recursive: true });
+  }
+
+  if (!existsSync(importedInboxFilePath)) {
+    writeFileSync(importedInboxFilePath, "[]", "utf8");
+  }
+}
+
+function isPersistedRawInboxEmail(value: unknown): value is RawInboxEmail {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const candidate = value as Record<string, unknown>;
+
+  return (
+    typeof candidate.id === "string" &&
+    typeof candidate.subject === "string" &&
+    typeof candidate.fromName === "string" &&
+    typeof candidate.fromEmail === "string" &&
+    typeof candidate.receivedAt === "string" &&
+    typeof candidate.bodyText === "string" &&
+    typeof candidate.provider === "string" &&
+    (candidate.threadId === undefined || typeof candidate.threadId === "string") &&
+    (candidate.bodyHtml === undefined || typeof candidate.bodyHtml === "string")
+  );
+}
+
+function isInboxImportPayload(value: unknown): value is InboxImportPayload {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const candidate = value as Record<string, unknown>;
+
+  return (
+    typeof candidate.id === "string" &&
+    typeof candidate.subject === "string" &&
+    typeof candidate.bodyText === "string" &&
+    typeof candidate.fromName === "string" &&
+    typeof candidate.fromEmail === "string" &&
+    typeof candidate.receivedAt === "string"
+  );
+}
+
+function normalizeImportedEmail(payload: InboxImportPayload): RawInboxEmail {
+  return {
+    id: payload.id.trim(),
+    subject: payload.subject.trim(),
+    fromName: payload.fromName.trim(),
+    fromEmail: payload.fromEmail.trim(),
+    receivedAt: payload.receivedAt.trim(),
+    bodyText: payload.bodyText.trim(),
+    provider: "outlook_addin_import",
+  };
+}
+
+function loadPersistedImportedEmails(): RawInboxEmail[] {
+  ensureImportedInboxFile();
+
+  try {
+    const rawFile = readFileSync(importedInboxFilePath, "utf8");
+    const parsed = JSON.parse(rawFile) as unknown;
+
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+
+    return parsed.filter(isPersistedRawInboxEmail);
+  } catch {
+    return [];
+  }
+}
+
+function persistImportedEmails(importedEmails: RawInboxEmail[]) {
+  ensureImportedInboxFile();
+  writeFileSync(importedInboxFilePath, JSON.stringify(importedEmails, null, 2), "utf8");
+}
+
+let importedInboxStore = loadPersistedImportedEmails();
+
+export function importInboxEmail(payload: unknown): { success: true } {
+  if (!isInboxImportPayload(payload)) {
+    throw new Error("Invalid inbox import payload.");
+  }
+
+  const normalizedEmail = normalizeImportedEmail(payload);
+
+  if (
+    !normalizedEmail.id ||
+    !normalizedEmail.subject ||
+    !normalizedEmail.bodyText ||
+    !normalizedEmail.fromName ||
+    !normalizedEmail.fromEmail ||
+    !normalizedEmail.receivedAt
+  ) {
+    throw new Error("Invalid inbox import payload.");
+  }
+
+  importedInboxStore = importedInboxStore.filter((email) => email.id !== normalizedEmail.id);
+  importedInboxStore.unshift(normalizedEmail);
+  persistImportedEmails(importedInboxStore);
+
+  return { success: true };
+}
+
+export function getInboxPage(options?: {
+  cursor?: string;
+  limit?: number;
+}): EmailSourceListResult {
+  importedInboxStore = loadPersistedImportedEmails();
+
+  const seededEmails = getMockRawInboxEmails().filter(
+    (seededEmail) => !importedInboxStore.some((importedEmail) => importedEmail.id === seededEmail.id),
+  );
+  const rawEmails = [...importedInboxStore, ...seededEmails];
+  const parsedCursor = options?.cursor ? Number.parseInt(options.cursor, 10) : 0;
+  const startIndex = Number.isNaN(parsedCursor) ? 0 : Math.max(parsedCursor, 0);
+  const pageSize =
+    typeof options?.limit === "number" && options.limit > 0
+      ? Math.floor(options.limit)
+      : DEFAULT_PAGE_SIZE;
+  const emails = rawEmails.slice(startIndex, startIndex + pageSize);
+  const nextCursor =
+    startIndex + pageSize < rawEmails.length ? String(startIndex + pageSize) : undefined;
+
+  return {
+    emails,
+    nextCursor,
+  };
+}

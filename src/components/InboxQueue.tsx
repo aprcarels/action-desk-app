@@ -339,6 +339,15 @@ export function InboxQueue({
     backgroundColor: "#fcfdff",
   };
 
+  const sourceBadgeStyle: React.CSSProperties = {
+    fontSize: "12px",
+    fontWeight: 700,
+    color: "#0f766e",
+    backgroundColor: "#ccfbf1",
+    borderRadius: "999px",
+    padding: "4px 8px",
+  };
+
   return (
     <div style={containerStyle}>
       <div style={headerStyle}>
@@ -391,7 +400,7 @@ export function InboxQueue({
                 cursor: isLoadingInbox ? "not-allowed" : "pointer",
               }}
             >
-              {isLoadingInbox ? "Loading Inbox..." : "Refresh Inbox"}
+              {isLoadingInbox ? "Refreshing Queue..." : "Refresh Queue"}
             </button>
           </div>
         </div>
@@ -682,6 +691,9 @@ export function InboxQueue({
                   )}
                   {item.status === "processed" && item.result && (
                     <>
+                      {item.email.source === "outlook_import" && (
+                        <span style={sourceBadgeStyle}>From Outlook</span>
+                      )}
                       <span
                         style={{
                           fontSize: "12px",
@@ -711,6 +723,9 @@ export function InboxQueue({
                   >
                     {item.issueCount} issues
                   </span>
+                  {item.status !== "processed" && item.email.source === "outlook_import" && (
+                    <span style={sourceBadgeStyle}>From Outlook</span>
+                  )}
                 </div>
               </button>
 
