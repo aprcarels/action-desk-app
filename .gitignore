@@ -22,3 +22,11 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Local environment and scratch files
+.env
+.env.local
+.env.*.local
+,env
+temp-morning-briefing
+temp-morning-briefing/

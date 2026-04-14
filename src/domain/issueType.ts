@@ -1,4 +1,5 @@
 import type { EmailAnalysis, OrderContext } from "../types/actionDesk";
+import { hasCaseIdentifiers } from "../services/caseIdentifiers";
 
 export type IssueType =
   | "delivered_not_received"
@@ -22,7 +23,12 @@ export function deriveIssueType(
     return "delayed_shipment";
   }
 
-  if (analysis.intent === "where_is_my_order" && !analysis.orderNumber && !orderContext) {
+  if (
+    analysis.intent === "where_is_my_order" &&
+    !analysis.orderNumber &&
+    !orderContext &&
+    !hasCaseIdentifiers(analysis)
+  ) {
     return "missing_order";
   }
 

@@ -1,5 +1,9 @@
+export type InboxProvider = "dev_json" | "outlook_graph" | "outlook_addin_import";
+
 export type RawInboxEmail = {
   id: string;
+  externalId: string;
+  provider: InboxProvider;
   threadId?: string;
   subject: string;
   fromName: string;
@@ -7,7 +11,7 @@ export type RawInboxEmail = {
   receivedAt: string;
   bodyText: string;
   bodyHtml?: string;
-  provider: string;
+  previewText?: string;
 };
 
 export type EmailSourceListResult = {
@@ -19,5 +23,6 @@ export interface EmailSource {
   listEmails(options?: {
     limit?: number;
     cursor?: string;
+    interactiveAuth?: boolean;
   }): Promise<EmailSourceListResult>;
 }

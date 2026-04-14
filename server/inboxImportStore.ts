@@ -4,7 +4,7 @@ import {
   readFileSync,
   writeFileSync,
 } from "node:fs";
-import { resolve, dirname } from "node:path";
+import { dirname, resolve } from "node:path";
 import { getMockRawInboxEmails } from "../src/mocks/mockInboxApi";
 import { cleanEmailText } from "../src/services/cleanEmailText";
 import type { EmailSourceListResult, RawInboxEmail } from "../src/types/inboxSource";
@@ -42,6 +42,7 @@ function isPersistedRawInboxEmail(value: unknown): value is RawInboxEmail {
 
   return (
     typeof candidate.id === "string" &&
+    typeof candidate.externalId === "string" &&
     typeof candidate.subject === "string" &&
     typeof candidate.fromName === "string" &&
     typeof candidate.fromEmail === "string" &&
@@ -49,7 +50,8 @@ function isPersistedRawInboxEmail(value: unknown): value is RawInboxEmail {
     typeof candidate.bodyText === "string" &&
     typeof candidate.provider === "string" &&
     (candidate.threadId === undefined || typeof candidate.threadId === "string") &&
-    (candidate.bodyHtml === undefined || typeof candidate.bodyHtml === "string")
+    (candidate.bodyHtml === undefined || typeof candidate.bodyHtml === "string") &&
+    (candidate.previewText === undefined || typeof candidate.previewText === "string")
   );
 }
 
@@ -70,14 +72,22 @@ function isInboxImportPayload(value: unknown): value is InboxImportPayload {
   );
 }
 
+function buildPreviewText(bodyText: string): string {
+  return bodyText.replace(/\s+/g, " ").trim();
+}
+
 function normalizeImportedEmail(payload: InboxImportPayload): RawInboxEmail {
+  const cleanedBodyText = cleanEmailText(payload.bodyText);
+
   return {
     id: payload.id.trim(),
+    externalId: payload.id.trim(),
     subject: payload.subject.trim(),
     fromName: payload.fromName.trim(),
     fromEmail: payload.fromEmail.trim(),
     receivedAt: payload.receivedAt.trim(),
-    bodyText: cleanEmailText(payload.bodyText),
+    bodyText: cleanedBodyText,
+    previewText: buildPreviewText(cleanedBodyText),
     provider: "outlook_addin_import",
   };
 }

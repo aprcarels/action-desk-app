@@ -55,3 +55,24 @@ If the project is later narrowed to a browser-only Inbox Queue demo, those files
 npm run build
 npm run lint
 ```
+
+## Live Pilot Mode
+
+To run the live-only pilot experience locally, set these values in `.env`:
+
+```bash
+VITE_PILOT_MODE=true
+VITE_INBOX_SOURCE=api
+```
+
+Pilot mode hides seeded inbox data and suppresses mock order context in the visible UI.
+
+## Microsoft Auth
+
+Local Microsoft sign-in expects this SPA redirect URI to be registered in Azure App Registration:
+
+```text
+https://localhost:5173/auth/popup-callback.html
+```
+
+This callback page is intentionally blank so MSAL can finish popup and silent auth without the app navigating away or clearing the hash too early.

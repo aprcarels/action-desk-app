@@ -1,4 +1,15 @@
 import { useEffect, useRef, useState } from "react";
+import { QueueApplicationService } from "./app/queueApplicationService";
+import {
+  runPersistedMarkDone,
+  runPersistedRecomputePriority,
+  runPersistedUpdateWorkStatus,
+} from "./app/persistedQueueActions";
+import {
+  applyPersistedQueueProjection,
+  runPersistedInitialLoad,
+  runPersistedLoadMore,
+} from "./app/persistedQueueLoadHelpers";
 import {
   createFailedProcessedEmail,
   createPendingProcessedEmail,
@@ -10,14 +21,41 @@ import {
   refreshProcessedEmailReplyDraft,
   sortProcessedEmails,
 } from "./app/processEmails";
+import {  refreshProcessedQueue,
+} from "./app/persistedQueueUiHelpers";
 import { runActionDesk } from "./app/runActionDesk";
 import { EmailDetail } from "./components/EmailDetail";
 import { InboxQueue } from "./components/InboxQueue";
 import { deriveIssueType, getIssueTypeLabel, type IssueType } from "./domain/issueType";
+import { buildAnalysisInput } from "./services/analysisInput";
+import { formatCaseForReview, formatRawCaseJson } from "./services/caseReviewCopy";
+import { shouldShowInCustomerServiceQueue } from "./services/customerServiceMail";
 import { generateReply } from "./services/generateReply";
 import { loadInboxQueue } from "./services/loadInboxQueue";
+import { PILOT_ORDER_DATA_MESSAGE, isPilotModeEnabled } from "./services/pilotMode";
+import {
+  getPilotQueueItemState,
+  loadPilotQueueStateMap,
+  savePilotQueueStateMap,
+  setPilotUsefulnessFeedback,
+  setPilotWorkflowStatus,
+  shouldShowPilotQueueItemInView,
+  snoozePilotQueueItemUntilTomorrow,
+  type PilotQueueStateMap,
+} from "./services/pilotQueueState";
+import { getQueueAgeInfo } from "./services/queueAging";
 import { getCachedProcessedEmail, setCachedProcessedEmail } from "./services/processedEmailCache";
-import type { EmailItem, IntentCode, ProcessedEmail } from "./types/actionDesk";
+import { isPersistedQueueEnabled } from "./services/persistedQueueFeature";
+import type {
+  EmailItem,
+  IntentCode,
+  PilotQueueItemState,
+  PilotQueueView,
+  PilotUsefulnessFeedback,
+  ProcessedEmail,
+} from "./types/actionDesk";
+
+const SIGN_IN_REQUIRED_MESSAGE = "Sign in to Microsoft to load your live inbox.";
 
 type TopIssue = {
   code: IssueType;
@@ -44,8 +82,60 @@ function getIssueCode(item: ProcessedEmail): IssueType | null {
   return deriveIssueType(item.result.analysis, item.result.orderContext);
 }
 
+function getPilotItemStateForEmail(
+  pilotItemStates: PilotQueueStateMap,
+  emailId: string,
+): PilotQueueItemState {
+  return getPilotQueueItemState(pilotItemStates, emailId);
+}
+
+function sortVisibleQueueItemsByAge(
+  items: ProcessedEmail[],
+  pilotItemStates: PilotQueueStateMap,
+  pilotMode: boolean,
+  now = new Date(),
+): ProcessedEmail[] {
+  return [...items].sort((left, right) => {
+    if (left.status !== "processed" || right.status !== "processed") {
+      return 0;
+    }
+
+    const leftPriority = left.result?.priorityScore ?? 0;
+    const rightPriority = right.result?.priorityScore ?? 0;
+
+    if (Math.abs(leftPriority - rightPriority) >= 15) {
+      return 0;
+    }
+
+    const leftAge = getQueueAgeInfo({
+      receivedAt: left.email.receivedAt,
+      pilotItemState: pilotMode ? getPilotItemStateForEmail(pilotItemStates, left.email.id) : undefined,
+      now,
+    });
+    const rightAge = getQueueAgeInfo({
+      receivedAt: right.email.receivedAt,
+      pilotItemState: pilotMode ? getPilotItemStateForEmail(pilotItemStates, right.email.id) : undefined,
+      now,
+    });
+
+    if (rightAge.sortWeight !== leftAge.sortWeight) {
+      return rightAge.sortWeight - leftAge.sortWeight;
+    }
+
+    return 0;
+  });
+}
+
 export default function App() {
+  const pilotMode = isPilotModeEnabled();
+  const persistedQueueEnabled = isPersistedQueueEnabled();
   const [queueItems, setQueueItems] = useState<ProcessedEmail[]>([]);
+  const [queueView, setQueueView] = useState<"customer_service" | "all_inbox">("customer_service");
+  const [showDetailView, setShowDetailView] = useState(false);
+  const [pilotItemStates, setPilotItemStates] = useState<PilotQueueStateMap>(() =>
+    pilotMode ? loadPilotQueueStateMap() : {},
+  );
+  const [pilotQueueView, setPilotQueueView] = useState<PilotQueueView>("active");
   const [selectedEmailId, setSelectedEmailId] = useState<string | undefined>(undefined);
   const [loading, setLoading] = useState(true);
   const [isLoadingInbox, setIsLoadingInbox] = useState(true);
@@ -58,6 +148,8 @@ export default function App() {
   const [processingStatus, setProcessingStatus] = useState<string | null>(null);
   const [replyActionError, setReplyActionError] = useState<string | null>(null);
   const [copyFeedback, setCopyFeedback] = useState<"idle" | "success" | "error">("idle");
+  const [caseCopyFeedback, setCaseCopyFeedback] = useState<"idle" | "success" | "error">("idle");
+  const [rawCaseCopyFeedback, setRawCaseCopyFeedback] = useState<"idle" | "success" | "error">("idle");
   const [regeneratingReply, setRegeneratingReply] = useState(false);
   const [retryingEmailId, setRetryingEmailId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
@@ -67,18 +159,47 @@ export default function App() {
   const [activeIssueFilter, setActiveIssueFilter] = useState<TopIssue["code"] | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
   const copyFeedbackTimeoutRef = useRef<number | null>(null);
+  const caseCopyFeedbackTimeoutRef = useRef<number | null>(null);
+  const rawCaseCopyFeedbackTimeoutRef = useRef<number | null>(null);
+  const processingStatusTimeoutRef = useRef<number | null>(null);
   const isMountedRef = useRef(true);
   const lastFocusRefreshAtRef = useRef(0);
+  const nextInboxLoadInteractiveRef = useRef(false);
+  const queueApplicationServiceRef = useRef<QueueApplicationService | null>(null);
 
-  function resetCopyFeedbackWithDelay(nextState: "success" | "error") {
-    if (copyFeedbackTimeoutRef.current !== null) {
-      window.clearTimeout(copyFeedbackTimeoutRef.current);
+  function getQueueApplicationService(): QueueApplicationService {
+    if (!queueApplicationServiceRef.current) {
+      queueApplicationServiceRef.current = new QueueApplicationService();
     }
 
-    setCopyFeedback(nextState);
-    copyFeedbackTimeoutRef.current = window.setTimeout(() => {
-      setCopyFeedback("idle");
-      copyFeedbackTimeoutRef.current = null;
+    return queueApplicationServiceRef.current;
+  }
+
+  function resetFeedbackWithDelay(
+    setFeedback: React.Dispatch<React.SetStateAction<"idle" | "success" | "error">>,
+    timeoutRef: React.MutableRefObject<number | null>,
+    nextState: "success" | "error",
+  ) {
+    if (timeoutRef.current !== null) {
+      window.clearTimeout(timeoutRef.current);
+    }
+
+    setFeedback(nextState);
+    timeoutRef.current = window.setTimeout(() => {
+      setFeedback("idle");
+      timeoutRef.current = null;
+    }, 2500);
+  }
+
+  function showTemporaryProcessingStatus(message: string) {
+    if (processingStatusTimeoutRef.current !== null) {
+      window.clearTimeout(processingStatusTimeoutRef.current);
+    }
+
+    setProcessingStatus(message);
+    processingStatusTimeoutRef.current = window.setTimeout(() => {
+      setProcessingStatus(null);
+      processingStatusTimeoutRef.current = null;
     }, 2500);
   }
 
@@ -175,6 +296,9 @@ export default function App() {
     let isMounted = true;
 
     async function loadQueue() {
+      const shouldUseInteractiveAuth = nextInboxLoadInteractiveRef.current;
+      nextInboxLoadInteractiveRef.current = false;
+
       setLoading(true);
       setIsLoadingInbox(true);
       setLoadError(null);
@@ -187,8 +311,31 @@ export default function App() {
 
       let inboxEmails: EmailItem[] = [];
 
-      try {
-        const inboxResult = await loadInboxQueue();
+            try {
+        if (persistedQueueEnabled) {
+          const loadResult = await runPersistedInitialLoad({
+            service: getQueueApplicationService(),
+            interactiveAuth: shouldUseInteractiveAuth,
+            setQueueItems,
+            setNextCursor,
+            setLastLoadedAt,
+            setSelectedEmailId,
+            setProcessingStatus,
+            setIsLoadingInbox,
+            setLoading,
+            isMounted,
+          });
+
+          if (!loadResult) {
+            return;
+          }
+
+          return;
+        }
+
+        const inboxResult = await loadInboxQueue({
+          interactiveAuth: shouldUseInteractiveAuth,
+        });
         inboxEmails = inboxResult.items;
 
         if (!isMounted) {
@@ -224,6 +371,10 @@ export default function App() {
           setIsLoadingInbox(false);
         }
         return;
+      } finally {
+        if (isMounted) {
+          setLoading(false);
+        }
       }
 
       try {
@@ -247,10 +398,6 @@ export default function App() {
           setLoadError("The inbox queue could not be processed. Please refresh and try again.");
           setProcessingStatus(null);
         }
-      } finally {
-        if (isMounted) {
-          setLoading(false);
-        }
       }
     }
 
@@ -260,15 +407,40 @@ export default function App() {
       isMounted = false;
       isMountedRef.current = false;
     };
-  }, [reloadToken]);
+  }, [reloadToken, persistedQueueEnabled]);
 
   useEffect(() => {
+    const copyFeedbackTimeout = copyFeedbackTimeoutRef.current;
+    const caseCopyFeedbackTimeout = caseCopyFeedbackTimeoutRef.current;
+    const rawCaseCopyFeedbackTimeout = rawCaseCopyFeedbackTimeoutRef.current;
+    const processingStatusTimeout = processingStatusTimeoutRef.current;
+
     return () => {
-      if (copyFeedbackTimeoutRef.current !== null) {
-        window.clearTimeout(copyFeedbackTimeoutRef.current);
+      if (copyFeedbackTimeout !== null) {
+        window.clearTimeout(copyFeedbackTimeout);
+      }
+
+      if (caseCopyFeedbackTimeout !== null) {
+        window.clearTimeout(caseCopyFeedbackTimeout);
+      }
+
+      if (rawCaseCopyFeedbackTimeout !== null) {
+        window.clearTimeout(rawCaseCopyFeedbackTimeout);
+      }
+
+      if (processingStatusTimeout !== null) {
+        window.clearTimeout(processingStatusTimeout);
       }
     };
   }, []);
+
+  useEffect(() => {
+    if (!pilotMode) {
+      return;
+    }
+
+    savePilotQueueStateMap(pilotItemStates);
+  }, [pilotItemStates, pilotMode]);
 
   useEffect(() => {
     function handleWindowFocus() {
@@ -294,6 +466,28 @@ export default function App() {
     };
   }, [loading, isLoadingInbox, isLoadingMore]);
 
+  function updatePilotQueueState(
+    updater: (current: PilotQueueStateMap) => PilotQueueStateMap,
+  ) {
+    if (!pilotMode) {
+      return;
+    }
+
+    setPilotItemStates((current) => updater(current));
+  }
+
+  function handleSetPilotWorkflowStatus(emailId: string, workflowStatus: PilotQueueItemState["workflowStatus"]) {
+    updatePilotQueueState((current) => setPilotWorkflowStatus(current, emailId, workflowStatus));
+  }
+
+  function handleSnoozeUntilTomorrow(emailId: string) {
+    updatePilotQueueState((current) => snoozePilotQueueItemUntilTomorrow(current, emailId));
+  }
+
+  function handleSetPilotUsefulness(emailId: string, usefulness: PilotUsefulnessFeedback) {
+    updatePilotQueueState((current) => setPilotUsefulnessFeedback(current, emailId, usefulness));
+  }
+
   async function handleCopyReply() {
     if (!selectedItem || selectedItem.status !== "processed" || !hasReplyDraft) {
       return;
@@ -302,15 +496,63 @@ export default function App() {
     setReplyActionError(null);
 
     if (!navigator.clipboard?.writeText) {
-      resetCopyFeedbackWithDelay("error");
+      resetFeedbackWithDelay(setCopyFeedback, copyFeedbackTimeoutRef, "error");
       return;
     }
 
     try {
       await navigator.clipboard.writeText(selectedReplyDraft);
-      resetCopyFeedbackWithDelay("success");
+      resetFeedbackWithDelay(setCopyFeedback, copyFeedbackTimeoutRef, "success");
     } catch {
-      resetCopyFeedbackWithDelay("error");
+      resetFeedbackWithDelay(setCopyFeedback, copyFeedbackTimeoutRef, "error");
+    }
+  }
+
+  async function handleCopyCaseForReview() {
+    if (!selectedItem) {
+      return;
+    }
+
+    if (!navigator.clipboard?.writeText) {
+      resetFeedbackWithDelay(setCaseCopyFeedback, caseCopyFeedbackTimeoutRef, "error");
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(
+        formatCaseForReview({
+          item: selectedItem,
+          pilotItemState: selectedPilotState,
+          orderDataMessage: pilotMode ? PILOT_ORDER_DATA_MESSAGE : undefined,
+        }),
+      );
+      resetFeedbackWithDelay(setCaseCopyFeedback, caseCopyFeedbackTimeoutRef, "success");
+    } catch {
+      resetFeedbackWithDelay(setCaseCopyFeedback, caseCopyFeedbackTimeoutRef, "error");
+    }
+  }
+
+  async function handleCopyRawCaseJson() {
+    if (!selectedItem) {
+      return;
+    }
+
+    if (!navigator.clipboard?.writeText) {
+      resetFeedbackWithDelay(setRawCaseCopyFeedback, rawCaseCopyFeedbackTimeoutRef, "error");
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(
+        formatRawCaseJson({
+          item: selectedItem,
+          pilotItemState: selectedPilotState,
+          orderDataMessage: pilotMode ? PILOT_ORDER_DATA_MESSAGE : undefined,
+        }),
+      );
+      resetFeedbackWithDelay(setRawCaseCopyFeedback, rawCaseCopyFeedbackTimeoutRef, "success");
+    } catch {
+      resetFeedbackWithDelay(setRawCaseCopyFeedback, rawCaseCopyFeedbackTimeoutRef, "error");
     }
   }
 
@@ -359,6 +601,7 @@ export default function App() {
       return;
     }
 
+    nextInboxLoadInteractiveRef.current = true;
     setReloadToken((current) => current + 1);
   }
 
@@ -371,7 +614,24 @@ export default function App() {
     setLoadMoreError(null);
 
     try {
-      const inboxResult = await loadInboxQueue(nextCursor);
+      if (persistedQueueEnabled) {
+        const queueResult = await getQueueApplicationService().loadAndProcessInbox({
+          cursor: nextCursor,
+          interactiveAuth: true,
+        });
+
+          applyPersistedQueueProjection({
+          processedItems: queueResult.processedItems,
+          nextCursor: queueResult.nextCursor,
+          processingMessage: null,
+        });
+        return;
+      }
+
+      const inboxResult = await loadInboxQueue({
+        cursor: nextCursor,
+        interactiveAuth: true,
+      });
       const existingIds = new Set(queueItems.map((item) => item.email.id));
       const seenNewIds = new Set<string>();
       const newInboxEmails = inboxResult.items.filter((email) => {
@@ -432,7 +692,7 @@ export default function App() {
     );
 
     try {
-      const nextResult = await runActionDesk(failedItem.email.body);
+      const nextResult = await runActionDesk(buildAnalysisInput(failedItem.email));
       const nextProcessedItem = createProcessedEmail(failedItem.email, nextResult);
       setCachedProcessedEmail(nextProcessedItem);
       setQueueItems((currentItems) =>
@@ -456,8 +716,29 @@ export default function App() {
     searchQuery,
     urgency: urgencyFilter,
     intent: intentFilter,
+    queueView,
   });
-  const visibleQueueItems = filteredQueueItems.filter((item) => {
+  const activePilotQueueItems = pilotMode
+    ? queueItems.filter((item) =>
+        shouldShowPilotQueueItemInView(
+          getPilotItemStateForEmail(pilotItemStates, item.email.id),
+          "active",
+        ),
+      )
+    : queueItems;
+  const queueScopeItems =
+    queueView === "customer_service"
+      ? activePilotQueueItems.filter((item) => shouldShowInCustomerServiceQueue(item))
+      : activePilotQueueItems;
+  const queueViewFilteredItems = pilotMode
+    ? filteredQueueItems.filter((item) =>
+        shouldShowPilotQueueItemInView(
+          getPilotItemStateForEmail(pilotItemStates, item.email.id),
+          pilotQueueView,
+        ),
+      )
+    : filteredQueueItems;
+  const visibleQueueItems = sortVisibleQueueItemsByAge(queueViewFilteredItems.filter((item) => {
     if (showProblemsOnly && (item.status !== "processed" || (item.result?.priorityScore ?? 0) < 70)) {
       return false;
     }
@@ -467,17 +748,21 @@ export default function App() {
     }
 
     return true;
-  });
+  }), pilotItemStates, pilotMode);
   const queueSummary = {
-    totalLoaded: queueItems.length,
-    highPriority: queueItems.filter(
+    totalLoaded: queueScopeItems.length,
+    highPriority: queueScopeItems.filter(
       (item) => item.status === "processed" && (item.result?.priorityScore ?? 0) >= 70,
     ).length,
-    failed: queueItems.filter((item) => item.status === "failed").length,
-    processing: queueItems.filter((item) => item.status === "pending").length,
+    failed: queueScopeItems.filter((item) => item.status === "failed").length,
+    processing: queueScopeItems.filter((item) => item.status === "pending").length,
   };
+
+  const totalLoadedEmails = queueItems.length;
+  const visibleEmailCount = visibleQueueItems.length;
+  const hiddenEmailCount = Math.max(0, totalLoadedEmails - visibleEmailCount);
   const topIssues = Array.from(
-    queueItems.reduce((counts, item) => {
+    queueScopeItems.reduce((counts, item) => {
       const issueCode = getIssueCode(item);
 
       if (!issueCode || item.status !== "processed" || !item.result || item.result.priorityScore < 70) {
@@ -496,6 +781,9 @@ export default function App() {
     .sort((left, right) => right.count - left.count || left.label.localeCompare(right.label))
     .slice(0, 3);
   const selectedItem = visibleQueueItems.find((item) => item.email.id === selectedEmailId);
+  const selectedPilotState = selectedItem
+    ? getPilotItemStateForEmail(pilotItemStates, selectedItem.email.id)
+    : undefined;
   const selectedReplyDraft = selectedItem?.result?.replyDraft.trim() ?? "";
   const hasReplyDraft = selectedReplyDraft.length > 0;
   const hasActiveFilters =
@@ -503,11 +791,21 @@ export default function App() {
     urgencyFilter !== "all" ||
     intentFilter !== "all" ||
     showProblemsOnly ||
-    activeIssueFilter !== null;
+    activeIssueFilter !== null ||
+    queueView !== "customer_service" ||
+    (pilotMode && pilotQueueView !== "active");
+  const pilotEmptyStateMessage =
+    pilotMode && import.meta.env.VITE_INBOX_SOURCE !== "api"
+      ? "Pilot mode shows live inbox data only. Set VITE_INBOX_SOURCE=api to view live emails."
+      : pilotMode
+        ? "No live inbox emails are available right now. Seeded demo emails are hidden in pilot mode."
+        : undefined;
+  const needsMicrosoftSignIn = inboxLoadError === SIGN_IN_REQUIRED_MESSAGE;
 
   useEffect(() => {
     if (visibleQueueItems.length === 0) {
       setSelectedEmailId(undefined);
+      setShowDetailView(false);
       return;
     }
 
@@ -516,6 +814,8 @@ export default function App() {
     if (!hasSelectedVisible) {
       setSelectedEmailId(visibleQueueItems[0].email.id);
       setCopyFeedback("idle");
+      setCaseCopyFeedback("idle");
+      setRawCaseCopyFeedback("idle");
       setReplyActionError(null);
     }
   }, [visibleQueueItems, selectedEmailId]);
@@ -554,7 +854,6 @@ export default function App() {
 
   const layoutStyle: React.CSSProperties = {
     display: "grid",
-    gridTemplateColumns: "360px minmax(0, 1fr)",
     gap: "20px",
     alignItems: "start",
   };
@@ -567,13 +866,30 @@ export default function App() {
     boxShadow: "0 10px 30px rgba(15, 23, 42, 0.06)",
   };
 
+  const detailShellStyle: React.CSSProperties = {
+    display: "grid",
+    gap: "12px",
+  };
+
+  const backButtonStyle: React.CSSProperties = {
+    border: "1px solid #cbd5e1",
+    backgroundColor: "#ffffff",
+    color: "#0f172a",
+    borderRadius: "10px",
+    padding: "8px 12px",
+    fontSize: "13px",
+    fontWeight: 700,
+    cursor: "pointer",
+    justifySelf: "start",
+  };
+
   if (isLoadingInbox && queueItems.length === 0) {
     return (
       <div style={pageStyle}>
         <div style={shellStyle}>
           <div style={headerStyle}>
             <h1 style={titleStyle}>Action Desk</h1>
-            <p style={subtitleStyle}>Inbox Queue MVP</p>
+            <p style={subtitleStyle}>{pilotMode ? "Live Inbox Pilot" : "Inbox Queue MVP"}</p>
           </div>
 
           <div style={statusCardStyle}>
@@ -590,7 +906,7 @@ export default function App() {
         <div style={shellStyle}>
           <div style={headerStyle}>
             <h1 style={titleStyle}>Action Desk</h1>
-            <p style={subtitleStyle}>Inbox Queue MVP</p>
+            <p style={subtitleStyle}>{pilotMode ? "Live Inbox Pilot" : "Inbox Queue MVP"}</p>
           </div>
 
           <div style={statusCardStyle}>
@@ -611,7 +927,11 @@ export default function App() {
                 cursor: isLoadingInbox ? "not-allowed" : "pointer",
               }}
             >
-              {isLoadingInbox ? "Loading Inbox..." : "Retry Inbox Load"}
+              {isLoadingInbox
+                ? "Loading Inbox..."
+                : needsMicrosoftSignIn
+                  ? "Sign In to Load Inbox"
+                  : "Retry Inbox Load"}
             </button>
           </div>
         </div>
@@ -625,7 +945,7 @@ export default function App() {
         <div style={shellStyle}>
           <div style={headerStyle}>
             <h1 style={titleStyle}>Action Desk</h1>
-            <p style={subtitleStyle}>Inbox Queue MVP</p>
+            <p style={subtitleStyle}>{pilotMode ? "Live Inbox Pilot" : "Inbox Queue MVP"}</p>
           </div>
 
           <div style={statusCardStyle}>{loadError}</div>
@@ -640,62 +960,250 @@ export default function App() {
         <div style={headerStyle}>
           <h1 style={titleStyle}>Action Desk</h1>
           <p style={subtitleStyle}>
-            Inbox Queue MVP for customer support triage, analysis, and reply drafting
+            {pilotMode
+              ? "Live inbox pilot for customer support triage, suggested next action, and reply drafting"
+              : "Inbox Queue MVP for customer support triage, analysis, and reply drafting"}
           </p>
         </div>
 
         {inboxLoadError && (
           <div style={{ ...statusCardStyle, marginBottom: "20px" }}>{inboxLoadError}</div>
         )}
-        {processingStatus && <div style={{ ...statusCardStyle, marginBottom: "20px" }}>{processingStatus}</div>}
+                {processingStatus && (
+          <div style={{ ...statusCardStyle, marginBottom: "20px" }}>
+            {processingStatus}
+          </div>
+        )}
+
+        {!processingStatus && totalLoadedEmails > 0 && (
+          <div style={{ ...statusCardStyle, marginBottom: "20px" }}>
+            Loaded {totalLoadedEmails} emails. Showing {visibleEmailCount}
+            {hiddenEmailCount > 0 ? `, with ${hiddenEmailCount} hidden by the current view or filters.` : "."}
+          </div>
+        )}
 
         <div style={layoutStyle}>
-          <InboxQueue
-            items={visibleQueueItems}
-            totalCount={queueItems.length}
-            summary={queueSummary}
-            topIssues={topIssues}
-            activeIssueFilter={activeIssueFilter}
-            selectedEmailId={selectedEmailId}
-            hasActiveFilters={hasActiveFilters}
-            showProblemsOnly={showProblemsOnly}
-            isLoadingInbox={isLoadingInbox || loading}
-            isLoadingMore={isLoadingMore}
-            nextCursor={nextCursor}
-            loadMoreError={loadMoreError}
-            lastLoadedAt={lastLoadedAt}
-            searchQuery={searchQuery}
-            urgencyFilter={urgencyFilter}
-            intentFilter={intentFilter}
-            intentOptions={intentOptions}
-            onRefreshInbox={handleRefreshInbox}
-            onLoadMore={handleLoadMore}
-            retryingEmailId={retryingEmailId ?? undefined}
-            onRetryEmail={handleRetryEmail}
-            onToggleProblemsOnly={() => setShowProblemsOnly((current) => !current)}
-            onIssueFilterChange={(issueCode) => {
-              setActiveIssueFilter((current) => (current === issueCode ? null : issueCode));
-            }}
-            onClearIssueFilter={() => setActiveIssueFilter(null)}
-            onSelectEmail={(emailId) => {
-              setSelectedEmailId(emailId);
-              setCopyFeedback("idle");
-              setReplyActionError(null);
-            }}
-            onSearchQueryChange={setSearchQuery}
-            onUrgencyFilterChange={setUrgencyFilter}
-            onIntentFilterChange={setIntentFilter}
-          />
+          {!showDetailView || !selectedItem ? (
+            <InboxQueue
+              items={visibleQueueItems}
+              totalCount={pilotMode ? queueViewFilteredItems.length : filteredQueueItems.length}
+              summary={queueSummary}
+              topIssues={topIssues}
+              activeIssueFilter={activeIssueFilter}
+              selectedEmailId={selectedEmailId}
+              hasActiveFilters={hasActiveFilters}
+              pilotMode={pilotMode}
+              pilotEmptyStateMessage={pilotEmptyStateMessage}
+              pilotQueueView={pilotQueueView}
+              pilotItemStates={pilotItemStates}
+              queueView={queueView}
+              showProblemsOnly={showProblemsOnly}
+              isLoadingInbox={isLoadingInbox || loading}
+              isLoadingMore={isLoadingMore}
+              nextCursor={nextCursor}
+              loadMoreError={loadMoreError}
+              lastLoadedAt={lastLoadedAt}
+              searchQuery={searchQuery}
+              urgencyFilter={urgencyFilter}
+              intentFilter={intentFilter}
+              intentOptions={intentOptions}
+              onRefreshInbox={handleRefreshInbox}
+              onLoadMore={handleLoadMore}
+              retryingEmailId={retryingEmailId ?? undefined}
+              onRetryEmail={handleRetryEmail}
+              onToggleProblemsOnly={() => setShowProblemsOnly((current) => !current)}
+              onIssueFilterChange={(issueCode) => {
+                setActiveIssueFilter((current) => (current === issueCode ? null : issueCode));
+              }}
+              onClearIssueFilter={() => setActiveIssueFilter(null)}
+              onSelectEmail={(emailId) => {
+                setSelectedEmailId(emailId);
+                setShowDetailView(true);
+                setCopyFeedback("idle");
+                setCaseCopyFeedback("idle");
+                setRawCaseCopyFeedback("idle");
+                setReplyActionError(null);
+              }}
+              onPilotQueueViewChange={setPilotQueueView}
+              onQueueViewChange={setQueueView}
+              onSearchQueryChange={setSearchQuery}
+              onUrgencyFilterChange={setUrgencyFilter}
+              onIntentFilterChange={setIntentFilter}
+            />
+          ) : (
+            <div style={detailShellStyle}>
+              <button
+                type="button"
+                onClick={() => setShowDetailView(false)}
+                style={backButtonStyle}
+              >
+                Back to Queue
+              </button>
+              <EmailDetail
+                item={selectedItem}
+                pilotMode={pilotMode}
+                pilotItemState={selectedPilotState}
+                orderDataMessage={pilotMode ? PILOT_ORDER_DATA_MESSAGE : undefined}
+                hasReplyDraft={hasReplyDraft}
+                copyFeedback={copyFeedback}
+                caseCopyFeedback={caseCopyFeedback}
+                rawCaseCopyFeedback={rawCaseCopyFeedback}
+                regeneratingReply={regeneratingReply}
+                replyActionError={replyActionError}
+                onCopyReply={handleCopyReply}
+                onCopyCaseForReview={handleCopyCaseForReview}
+                onCopyRawCaseJson={handleCopyRawCaseJson}
+                onRegenerateReply={handleRegenerateReply}
+                onRecomputePriority={async () => {
+                  if (!selectedItem) {
+                    return;
+                  }
 
-          <EmailDetail
-            item={selectedItem}
-            hasReplyDraft={hasReplyDraft}
-            copyFeedback={copyFeedback}
-            regeneratingReply={regeneratingReply}
-            replyActionError={replyActionError}
-            onCopyReply={handleCopyReply}
-            onRegenerateReply={handleRegenerateReply}
-          />
+                  if (persistedQueueEnabled && selectedItem.queueItemId) {
+                    try {
+                      await runPersistedRecomputePriority({
+                        service: getQueueApplicationService(),
+                        selectedItem,
+                        setQueueItems,
+                        setSelectedEmailId,
+                        setShowDetailView,
+                        setReplyActionError,
+                        setCopyFeedback,
+                        setCaseCopyFeedback,
+                        setRawCaseCopyFeedback,
+                        showTemporaryProcessingStatus,
+                      });
+                    } catch {
+                      setReplyActionError(
+                        "Priority could not be recalculated right now. Please try again.",
+                      );
+                    }
+
+                    return;
+                  }
+
+                  showTemporaryProcessingStatus(
+                    "Recompute Priority is only active in the persisted queue mode.",
+                  );
+                }}
+                                onMarkPilotItemActive={async () => {
+                  if (!selectedItem) {
+                    return;
+                  }
+
+                  if (persistedQueueEnabled && selectedItem.queueItemId) {
+                    try {
+                      await runPersistedUpdateWorkStatus({
+                        service: getQueueApplicationService(),
+                        selectedItem,
+                        status: "active",
+                        successMessage: "Queue item moved back to Active.",
+                        onAfterSuccess: (emailId) => {
+                          handleSetPilotWorkflowStatus(emailId, "active");
+                        },
+                        setQueueItems,
+                        setSelectedEmailId,
+                        setShowDetailView,
+                        setReplyActionError,
+                        setCopyFeedback,
+                        setCaseCopyFeedback,
+                        setRawCaseCopyFeedback,
+                        showTemporaryProcessingStatus,
+                      });
+                    } catch {
+                      setReplyActionError(
+                        "This queue item could not be moved back to Active right now. Please try again.",
+                      );
+                    }
+
+                    return;
+                  }
+
+                  handleSetPilotWorkflowStatus(selectedItem.email.id, "active");
+                }}
+                                onMarkPilotItemDone={async () => {
+                  if (!selectedItem) {
+                    return;
+                  }
+
+                  if (persistedQueueEnabled && selectedItem.queueItemId) {
+                    try {
+                      await runPersistedMarkDone({
+                        service: getQueueApplicationService(),
+                        selectedItem,
+                        setQueueItems,
+                        setSelectedEmailId,
+                        setShowDetailView,
+                        setReplyActionError,
+                        setCopyFeedback,
+                        setCaseCopyFeedback,
+                        setRawCaseCopyFeedback,
+                        showTemporaryProcessingStatus,
+                      });
+                    } catch {
+                      setReplyActionError(
+                        "This queue item could not be marked done right now. Please try again.",
+                      );
+                    }
+
+                    return;
+                  }
+
+                  handleSetPilotWorkflowStatus(selectedItem.email.id, "done");
+                }}
+                onMarkPilotItemNotRelevant={() => {
+                  if (selectedItem) {
+                    handleSetPilotWorkflowStatus(selectedItem.email.id, "not_relevant");
+                  }
+                }}
+                                onMarkPilotItemWaitingOnCustomer={async () => {
+                  if (!selectedItem) {
+                    return;
+                  }
+
+                  if (persistedQueueEnabled && selectedItem.queueItemId) {
+                    try {
+                      await runPersistedUpdateWorkStatus({
+                        service: getQueueApplicationService(),
+                        selectedItem,
+                        status: "waiting_on_customer",
+                        successMessage: "Queue item moved to Waiting on Customer.",
+                        onAfterSuccess: (emailId) => {
+                          handleSetPilotWorkflowStatus(emailId, "waiting_on_customer");
+                        },
+                        setQueueItems,
+                        setSelectedEmailId,
+                        setShowDetailView,
+                        setReplyActionError,
+                        setCopyFeedback,
+                        setCaseCopyFeedback,
+                        setRawCaseCopyFeedback,
+                        showTemporaryProcessingStatus,
+                      });
+                    } catch {
+                      setReplyActionError(
+                        "This queue item could not be moved to Waiting on Customer right now. Please try again.",
+                      );
+                    }
+
+                    return;
+                  }
+
+                  handleSetPilotWorkflowStatus(selectedItem.email.id, "waiting_on_customer");
+                }}
+                onSnoozePilotItemUntilTomorrow={() => {
+                  if (selectedItem) {
+                    handleSnoozeUntilTomorrow(selectedItem.email.id);
+                  }
+                }}
+                onSetPilotUsefulness={(usefulness) => {
+                  if (selectedItem) {
+                    handleSetPilotUsefulness(selectedItem.email.id, usefulness);
+                  }
+                }}
+              />
+            </div>
+          )}
         </div>
       </div>
     </div>

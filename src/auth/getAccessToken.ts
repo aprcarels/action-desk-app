@@ -7,20 +7,26 @@ import {
   type AuthenticationResult,
 } from "@azure/msal-browser";
 import {
+  createMailReadSilentRequest,
   createMailReadPopupRequest,
   createMsalConfiguration,
   describeMissingMsalConfig,
   getMsalRuntimeConfig,
-  graphMailReadScopes,
 } from "./msalConfig";
 
 let msalClientPromise: Promise<PublicClientApplication | null> | null = null;
+let accessTokenPromise: Promise<string> | null = null;
+let loginPopupPromise: Promise<AuthenticationResult> | null = null;
 const MISSING_AUTH_CONFIGURATION_MESSAGE =
   "Microsoft mailbox access is not configured. Add VITE_AZURE_CLIENT_ID and VITE_AZURE_TENANT_ID or VITE_AZURE_AUTHORITY.";
 const SIGN_IN_FAILED_MESSAGE =
   "Microsoft sign-in could not be completed. Please sign in again and allow Mail.Read access.";
 const TOKEN_ACQUISITION_FAILED_MESSAGE =
   "Microsoft mailbox access could not be authorized right now. Please try again.";
+const SIGN_IN_ALREADY_IN_PROGRESS_MESSAGE =
+  "Microsoft sign-in is already in progress. Please finish the open sign-in popup and try again if needed.";
+const SIGN_IN_REQUIRED_MESSAGE =
+  "Sign in to Microsoft to load your live inbox.";
 
 function isNoTokenRequestCacheError(error: unknown): boolean {
   return error instanceof BrowserAuthError && error.errorCode === BrowserAuthErrorCodes.noTokenRequestCacheError;
@@ -31,6 +37,13 @@ function isUserCancelledAuthError(error: unknown): boolean {
     error instanceof BrowserAuthError &&
     (error.errorCode === BrowserAuthErrorCodes.userCancelled ||
       error.errorCode === BrowserAuthErrorCodes.popupWindowError)
+  );
+}
+
+function isInteractionInProgressError(error: unknown): boolean {
+  return (
+    error instanceof BrowserAuthError &&
+    error.errorCode === BrowserAuthErrorCodes.interactionInProgress
   );
 }
 
@@ -90,7 +103,48 @@ function getActiveAccount(client: PublicClientApplication): AccountInfo | null {
   return account;
 }
 
-export async function getAccessToken(): Promise<string> {
+async function ensureSignedIn(
+  client: PublicClientApplication,
+): Promise<AccountInfo> {
+  const existingAccount = getActiveAccount(client);
+
+  if (existingAccount) {
+    return existingAccount;
+  }
+
+  if (!loginPopupPromise) {
+    loginPopupPromise = client.loginPopup(createMailReadPopupRequest());
+  }
+
+  try {
+    const loginResponse = await loginPopupPromise;
+    const account = loginResponse.account ?? getActiveAccount(client);
+
+    if (!account) {
+      throw new Error(SIGN_IN_FAILED_MESSAGE);
+    }
+
+    client.setActiveAccount(account);
+
+    return account;
+  } catch (error) {
+    if (isUserCancelledAuthError(error)) {
+      throw new Error(SIGN_IN_FAILED_MESSAGE);
+    }
+
+    if (isInteractionInProgressError(error)) {
+      throw new Error(SIGN_IN_ALREADY_IN_PROGRESS_MESSAGE);
+    }
+
+    throw error;
+  } finally {
+    loginPopupPromise = null;
+  }
+}
+
+async function getAccessTokenInternal(
+  options?: { interactive?: boolean },
+): Promise<string> {
   const runtimeConfig = getMsalRuntimeConfig();
   const missingConfig = describeMissingMsalConfig(runtimeConfig);
 
@@ -104,30 +158,17 @@ export async function getAccessToken(): Promise<string> {
     throw new Error("Microsoft auth client could not be initialized.");
   }
 
-  let account = getActiveAccount(client);
+  const existingAccount = getActiveAccount(client);
 
-  if (!account) {
-    try {
-      const loginResponse = await client.loginPopup(createMailReadPopupRequest());
-      account = loginResponse.account ?? getActiveAccount(client);
-    } catch (error) {
-      if (isUserCancelledAuthError(error)) {
-        throw new Error(SIGN_IN_FAILED_MESSAGE);
-      }
-
-      throw error;
-    }
+  if (!existingAccount && options?.interactive !== true) {
+    throw new Error(SIGN_IN_REQUIRED_MESSAGE);
   }
 
-  if (!account) {
-    throw new Error(SIGN_IN_FAILED_MESSAGE);
-  }
+  const account = existingAccount ?? await ensureSignedIn(client);
+  client.setActiveAccount(account);
 
   try {
-    const tokenResponse = await client.acquireTokenSilent({
-      scopes: graphMailReadScopes,
-      account,
-    });
+    const tokenResponse = await client.acquireTokenSilent(createMailReadSilentRequest(account));
 
     client.setActiveAccount(tokenResponse.account ?? account);
     return tokenResponse.accessToken;
@@ -137,36 +178,44 @@ export async function getAccessToken(): Promise<string> {
         throw new Error(SIGN_IN_FAILED_MESSAGE);
       }
 
-      throw new Error(TOKEN_ACQUISITION_FAILED_MESSAGE);
-    }
-
-    let popupAccount: AccountInfo | null = null;
-
-    try {
-      const loginResponse = await client.loginPopup(createMailReadPopupRequest());
-      popupAccount = loginResponse.account ?? getActiveAccount(client);
-    } catch (popupError) {
-      if (isUserCancelledAuthError(popupError)) {
-        throw new Error(SIGN_IN_FAILED_MESSAGE);
+      if (isInteractionInProgressError(error)) {
+        throw new Error(SIGN_IN_ALREADY_IN_PROGRESS_MESSAGE);
       }
 
       throw new Error(TOKEN_ACQUISITION_FAILED_MESSAGE);
     }
 
-    if (!popupAccount) {
-      throw new Error(SIGN_IN_FAILED_MESSAGE);
-    }
+    const popupAccount = await ensureSignedIn(client);
 
     try {
-      const tokenResponse = await client.acquireTokenSilent({
-        scopes: graphMailReadScopes,
-        account: popupAccount,
-      });
+      const tokenResponse = await client.acquireTokenSilent(
+        createMailReadSilentRequest(popupAccount),
+      );
 
       client.setActiveAccount(tokenResponse.account ?? popupAccount);
       return tokenResponse.accessToken;
-    } catch {
+    } catch (popupTokenError) {
+      if (isInteractionInProgressError(popupTokenError)) {
+        throw new Error(SIGN_IN_ALREADY_IN_PROGRESS_MESSAGE);
+      }
+
       throw new Error(TOKEN_ACQUISITION_FAILED_MESSAGE);
     }
+  }
+}
+
+export async function getAccessToken(
+  options?: { interactive?: boolean },
+): Promise<string> {
+  if (accessTokenPromise) {
+    return accessTokenPromise;
+  }
+
+  accessTokenPromise = getAccessTokenInternal(options);
+
+  try {
+    return await accessTokenPromise;
+  } finally {
+    accessTokenPromise = null;
   }
 }

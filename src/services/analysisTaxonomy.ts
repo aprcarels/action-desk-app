@@ -8,6 +8,7 @@ export const INTENT_LABELS: Record<IntentCode, string> = {
   damaged_shipment: "Damaged Shipment",
   address_change: "Address Change",
   billing_question: "Billing Question",
+  operational_confirmation: "Operational Confirmation",
   general_support: "General Support",
 };
 
@@ -36,6 +37,8 @@ const INTENT_ALIASES: Record<string, IntentCode> = {
   address_change: "address_change",
   address_change_request: "address_change",
   billing_question: "billing_question",
+  operational_confirmation: "operational_confirmation",
+  logistics_confirmation: "operational_confirmation",
   general_support: "general_support",
   general_support_request: "general_support",
   duplicate_shipment_concern: "general_support",

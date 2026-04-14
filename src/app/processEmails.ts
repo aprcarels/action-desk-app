@@ -1,4 +1,6 @@
 import { runActionDesk } from "./runActionDesk";
+import { normalizeProcessedEmailResult, shouldShowInCustomerServiceQueue } from "../services/customerServiceMail";
+import { buildAnalysisInput } from "../services/analysisInput";
 import type {
   ActionDeskResult,
   EmailItem,
@@ -10,6 +12,7 @@ export type QueueFilters = {
   searchQuery: string;
   urgency: "all" | "high" | "medium" | "low";
   intent: IntentCode | "all";
+  queueView?: "customer_service" | "all_inbox";
 };
 
 type ProcessEmailsProgressivelyOptions = {
@@ -29,16 +32,22 @@ export function buildPreviewText(result: ActionDeskResult, email: EmailItem): st
     return summary;
   }
 
-  return email.body.replace(/\s+/g, " ").trim();
+  return email.previewText?.trim() || email.body.replace(/\s+/g, " ").trim();
+}
+
+function getAnalysisInput(email: EmailItem): string {
+  return buildAnalysisInput(email);
 }
 
 export function createProcessedEmail(email: EmailItem, result: ActionDeskResult): ProcessedEmail {
+  const normalizedResult = normalizeProcessedEmailResult(email, result);
+
   return {
     email,
     status: "processed",
-    result,
-    issueCount: result.analysis.risks.length,
-    previewText: buildPreviewText(result, email),
+    result: normalizedResult,
+    issueCount: normalizedResult.analysis.risks.length,
+    previewText: buildPreviewText(normalizedResult, email),
   };
 }
 
@@ -51,7 +60,7 @@ export function createFailedProcessedEmail(
     status: "failed",
     processingError,
     issueCount: 0,
-    previewText: email.body.replace(/\s+/g, " ").trim(),
+    previewText: email.previewText?.trim() || email.body.replace(/\s+/g, " ").trim(),
   };
 }
 
@@ -60,12 +69,18 @@ export function createPendingProcessedEmail(email: EmailItem): ProcessedEmail {
     email,
     status: "pending",
     issueCount: 0,
-    previewText: email.body.replace(/\s+/g, " ").trim(),
+    previewText: email.previewText?.trim() || email.body.replace(/\s+/g, " ").trim(),
   };
 }
 
 function getProcessingErrorMessage(): string {
   return "This email could not be analyzed. Try retrying it.";
+}
+
+function getReceivedAtTimestamp(receivedAt: string): number {
+  const timestamp = Date.parse(receivedAt);
+
+  return Number.isNaN(timestamp) ? 0 : timestamp;
 }
 
 export function sortProcessedEmails(items: ProcessedEmail[]): ProcessedEmail[] {
@@ -90,7 +105,8 @@ export function sortProcessedEmails(items: ProcessedEmail[]): ProcessedEmail[] {
     }
 
     return (
-      new Date(right.email.receivedAt).getTime() - new Date(left.email.receivedAt).getTime()
+      getReceivedAtTimestamp(right.email.receivedAt) -
+      getReceivedAtTimestamp(left.email.receivedAt)
     );
   });
 }
@@ -102,6 +118,8 @@ export function filterProcessedEmails(
   const query = filters.searchQuery.trim().toLowerCase();
 
   return items.filter((item) => {
+    const matchesQueueView =
+      filters.queueView !== "customer_service" || shouldShowInCustomerServiceQueue(item);
     const matchesUrgency =
       filters.urgency === "all" ||
       (item.status === "processed" && item.result?.analysis.urgency === filters.urgency);
@@ -113,7 +131,7 @@ export function filterProcessedEmails(
       item.email.senderName.toLowerCase().includes(query) ||
       item.email.subject.toLowerCase().includes(query);
 
-    return matchesUrgency && matchesIntent && matchesSearch;
+    return matchesQueueView && matchesUrgency && matchesIntent && matchesSearch;
   });
 }
 
@@ -170,7 +188,7 @@ export function replaceProcessedEmail(
 export async function processEmails(emails: EmailItem[]): Promise<ProcessedEmail[]> {
   const settledItems = await Promise.allSettled(
     emails.map(async (email) => {
-      const result = await runActionDesk(email.body);
+      const result = await runActionDesk(getAnalysisInput(email));
 
       return createProcessedEmail(email, result);
     }),
@@ -200,7 +218,7 @@ export async function processEmailsProgressively(
   await Promise.all(
     emails.map(async (email) => {
       try {
-        const result = await runActionDesk(email.body);
+        const result = await runActionDesk(getAnalysisInput(email));
         const processedItem = createProcessedEmail(email, result);
 
         processedCount += 1;

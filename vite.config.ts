@@ -1,9 +1,10 @@
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type { ServerOptions } from "node:https";
-import { getInboxPage, importInboxEmail } from "./server/inboxImportStore";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import { handleInboxMessagesRequest } from "./server/inbox/inboxRoutes";
+import { getInboxPage, importInboxEmail } from "./server/inboxImportStore";
 
 const certKeyPath = resolve(__dirname, "certs", "localhost-key.pem");
 const certPath = resolve(__dirname, "certs", "localhost.pem");
@@ -18,8 +19,6 @@ const httpsConfig: ServerOptions = {
   key: readFileSync(certKeyPath),
   cert: readFileSync(certPath),
 };
-
-const GRAPH_BASE_URL = "https://graph.microsoft.com/v1.0";
 
 function handleMockInboxRequest(requestUrl: string) {
   const url = new URL(requestUrl, "https://localhost");
@@ -36,7 +35,7 @@ async function readRequestBody(req: {
   on(event: "end", listener: () => void): void;
   on(event: "error", listener: () => void): void;
 }) {
-  return new Promise<string>((resolve, reject) => {
+  return new Promise<string>((resolvePromise, reject) => {
     const chunks: Array<Buffer | string> = [];
 
     req.on("data", (chunk) => {
@@ -44,7 +43,7 @@ async function readRequestBody(req: {
     });
 
     req.on("end", () => {
-      resolve(chunks.map((chunk) => chunk.toString()).join(""));
+      resolvePromise(chunks.map((chunk) => chunk.toString()).join(""));
     });
 
     req.on("error", () => {
@@ -53,70 +52,11 @@ async function readRequestBody(req: {
   });
 }
 
-function isAllowedGraphRequest(method: string, pathWithQuery: string) {
-  if (method !== "GET") {
-    return false;
-  }
-
-  return /^\/me\/messages(?:\?.*)?$/i.test(pathWithQuery);
-}
-
-async function handleGraphProxyRequest(req: {
-  method?: string;
-  url?: string;
-  headers?: {
-    authorization?: string;
-    accept?: string;
-  };
-}, res: {
-  statusCode: number;
-  setHeader(name: string, value: string): void;
-  end(chunk?: string): void;
-}) {
-  if (!req.method || !req.url) {
-    res.statusCode = 400;
-    res.end("Invalid graph request.");
-    return;
-  }
-
-  const authorization = req.headers?.authorization;
-
-  if (!authorization?.startsWith("Bearer ")) {
-    res.statusCode = 401;
-    res.end("Missing bearer token.");
-    return;
-  }
-
-  const requestUrl = new URL(req.url, "https://localhost");
-  const graphPath = requestUrl.pathname.replace(/^\/api\/graph/i, "") || "/";
-  const pathWithQuery = `${graphPath}${requestUrl.search}`;
-
-  if (!isAllowedGraphRequest(req.method.toUpperCase(), pathWithQuery)) {
-    res.statusCode = 404;
-    res.end("Graph path is not enabled by this proxy.");
-    return;
-  }
-
-  const upstreamResponse = await fetch(`${GRAPH_BASE_URL}${pathWithQuery}`, {
-    method: req.method.toUpperCase(),
-    headers: {
-      Authorization: authorization,
-      Accept: req.headers?.accept ?? "application/json",
-    },
-  });
-
-  res.statusCode = upstreamResponse.status;
-  const contentType = upstreamResponse.headers.get("Content-Type");
-
-  if (contentType) {
-    res.setHeader("Content-Type", contentType);
-  }
-
-  res.end(await upstreamResponse.text());
-}
-
-function mockInboxApiPlugin() {
+function inboxApiPlugin() {
   const routeHandler = async (req: {
+    headers?: {
+      authorization?: string;
+    };
     method?: string;
     url?: string;
     on(event: "data", listener: (chunk: Buffer | string) => void): void;
@@ -134,6 +74,11 @@ function mockInboxApiPlugin() {
 
     const url = new URL(req.url, "https://localhost");
 
+    if (req.method === "GET" && url.pathname === "/api/inbox/messages") {
+      await handleInboxMessagesRequest(req, res);
+      return;
+    }
+
     if (req.method === "GET" && url.pathname === "/api/inbox") {
       try {
         const payload = handleMockInboxRequest(req.url);
@@ -144,17 +89,6 @@ function mockInboxApiPlugin() {
         res.statusCode = 500;
         res.setHeader("Content-Type", "application/json");
         res.end(JSON.stringify({ error: "Mock inbox route failed." }));
-      }
-      return;
-    }
-
-    if (req.method === "GET" && url.pathname.startsWith("/api/graph")) {
-      try {
-        await handleGraphProxyRequest(req, res);
-      } catch {
-        res.statusCode = 502;
-        res.setHeader("Content-Type", "application/json");
-        res.end(JSON.stringify({ error: "Graph proxy request failed." }));
       }
       return;
     }
@@ -179,7 +113,7 @@ function mockInboxApiPlugin() {
     if (
       url.pathname !== "/api/inbox" &&
       url.pathname !== "/api/inbox/import" &&
-      !url.pathname.startsWith("/api/graph")
+      url.pathname !== "/api/inbox/messages"
     ) {
       next();
       return;
@@ -187,7 +121,7 @@ function mockInboxApiPlugin() {
   };
 
   return {
-    name: "mock-inbox-api",
+    name: "inbox-api",
     configureServer(server: {
       middlewares: { use(handler: typeof routeHandler): void };
     }) {
@@ -202,7 +136,7 @@ function mockInboxApiPlugin() {
 }
 
 export default defineConfig({
-  plugins: [react(), mockInboxApiPlugin()],
+  plugins: [react(), inboxApiPlugin()],
   server: {
     host: "localhost",
     port: 5173,
@@ -216,6 +150,7 @@ export default defineConfig({
       input: {
         index: resolve(__dirname, "index.html"),
         taskpane: resolve(__dirname, "taskpane.html"),
+        popupCallback: resolve(__dirname, "auth", "popup-callback.html"),
       },
     },
   },

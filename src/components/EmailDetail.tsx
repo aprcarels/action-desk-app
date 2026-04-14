@@ -4,16 +4,38 @@ import {
   getIssueTypeLabel,
 } from "../domain/issueType";
 import { getIntentLabel, getRiskLabel } from "../services/analysisTaxonomy";
-import type { ProcessedEmail } from "../types/actionDesk";
+import { getWorkTypeLabel } from "../services/customerServiceMail";
+import { buildOutlookSearchUrl, canOpenInOutlook } from "../services/openInOutlook";
+import { getPilotQueueViewForItem } from "../services/pilotQueueState";
+import { getQueueAgeInfo } from "../services/queueAging";
+import type {
+  PilotQueueItemState,
+  PilotUsefulnessFeedback,
+  ProcessedEmail,
+} from "../types/actionDesk";
 
 type EmailDetailProps = {
   item?: ProcessedEmail;
+  pilotMode: boolean;
+  pilotItemState?: PilotQueueItemState;
+  orderDataMessage?: string;
   hasReplyDraft: boolean;
   copyFeedback: "idle" | "success" | "error";
+  caseCopyFeedback: "idle" | "success" | "error";
+  rawCaseCopyFeedback: "idle" | "success" | "error";
   regeneratingReply: boolean;
   replyActionError: string | null;
   onCopyReply: () => void;
+  onCopyCaseForReview: () => void;
+  onCopyRawCaseJson: () => void;
   onRegenerateReply: () => void;
+  onRecomputePriority: () => void;
+  onMarkPilotItemActive: () => void;
+  onMarkPilotItemDone: () => void;
+  onMarkPilotItemNotRelevant: () => void;
+  onMarkPilotItemWaitingOnCustomer: () => void;
+  onSnoozePilotItemUntilTomorrow: () => void;
+  onSetPilotUsefulness: (usefulness: PilotUsefulnessFeedback) => void;
 };
 
 function formatReceivedTime(receivedAt: string) {
@@ -48,15 +70,64 @@ function formatPriorityBreakdownLabel(label: string) {
   return `Risk: ${getRiskLabel(riskCode)}`;
 }
 
+function getActionabilityLabel(
+  actionability: NonNullable<ProcessedEmail["result"]>["analysis"]["actionability"],
+): string {
+  switch (actionability) {
+    case "action_required":
+      return "Action required";
+    case "awareness_only":
+      return "Awareness only";
+    case "no_action_needed":
+      return "No action needed";
+    case "review_needed":
+      return "Review needed";
+    default:
+      return "Review needed";
+  }
+}
+
+function getReplyNeededLabel(
+  replyNeeded: NonNullable<ProcessedEmail["result"]>["analysis"]["replyNeeded"],
+): string {
+  switch (replyNeeded) {
+    case "yes":
+      return "Reply recommended";
+    case "no":
+      return "Reply not recommended";
+    case "maybe":
+    default:
+      return "Reply optional";
+  }
+}
+
 export function EmailDetail({
   item,
+  pilotMode,
+  pilotItemState,
+  orderDataMessage,
   hasReplyDraft,
   copyFeedback,
+  caseCopyFeedback,
+  rawCaseCopyFeedback,
   regeneratingReply,
   replyActionError,
   onCopyReply,
+  onCopyCaseForReview,
+  onCopyRawCaseJson,
   onRegenerateReply,
+  onRecomputePriority,
+  onMarkPilotItemActive,
+  onMarkPilotItemDone,
+  onMarkPilotItemNotRelevant,
+  onMarkPilotItemWaitingOnCustomer,
+  onSnoozePilotItemUntilTomorrow,
+  onSetPilotUsefulness,
 }: EmailDetailProps) {
+  function isOutlookEmailSource(source?: ProcessedEmail["email"]["source"]) {
+    return source === "outlook_import" || source === "outlook_graph";
+  }
+
   const panelStyle: React.CSSProperties = {
     backgroundColor: "#ffffff",
     border: "1px solid #d8e1ec",
@@ -149,6 +220,8 @@ export function EmailDetail({
     marginTop: "8px",
   };
 
+  const pilotItemView = pilotItemState ? getPilotQueueViewForItem(pilotItemState) : "active";
+
   if (!item) {
     return (
       <div style={panelStyle}>
@@ -165,7 +238,7 @@ export function EmailDetail({
       <div style={panelStyle}>
         <div style={sectionStyle}>
           <h2 style={titleStyle}>{item.email.subject}</h2>
-          {item.email.source === "outlook_import" && (
+          {isOutlookEmailSource(item.email.source) && (
             <div style={sourceBadgeStyle}>Imported from Outlook</div>
           )}
           <p style={{ ...textStyle, marginTop: "8px" }}>
@@ -198,7 +271,7 @@ export function EmailDetail({
       <div style={panelStyle}>
         <div style={sectionStyle}>
           <h2 style={titleStyle}>{item.email.subject}</h2>
-          {item.email.source === "outlook_import" && (
+          {isOutlookEmailSource(item.email.source) && (
             <div style={sourceBadgeStyle}>Imported from Outlook</div>
           )}
           <p style={{ ...textStyle, marginTop: "8px" }}>
@@ -225,12 +298,17 @@ export function EmailDetail({
   }
 
   const draftIssueType = deriveIssueType(item.result.analysis, item.result.orderContext);
+  const canOpenOutlook = canOpenInOutlook(item);
+  const queueAge = getQueueAgeInfo({
+    receivedAt: item.email.receivedAt,
+    pilotItemState: pilotMode ? pilotItemState : undefined,
+  });
 
   return (
     <div style={panelStyle}>
       <div style={sectionStyle}>
         <h2 style={titleStyle}>{item.email.subject}</h2>
-        {item.email.source === "outlook_import" && (
+        {isOutlookEmailSource(item.email.source) && (
           <div style={sourceBadgeStyle}>Imported from Outlook</div>
         )}
         <p style={{ ...textStyle, marginTop: "8px" }}>
@@ -238,6 +316,9 @@ export function EmailDetail({
         </p>
         <p style={textStyle}>
           <strong>Received:</strong> {formatReceivedTime(item.email.receivedAt)}
+        </p>
+        <p style={textStyle}>
+          <strong>Queue Age:</strong> {queueAge.label}
         </p>
       </div>
 
@@ -275,6 +356,22 @@ export function EmailDetail({
             <p style={{ ...textStyle, fontWeight: 700 }}>Order Number</p>
             <p style={textStyle}>{item.result.analysis.orderNumber ?? "Not provided"}</p>
           </div>
+          <div>
+            <p style={{ ...textStyle, fontWeight: 700 }}>Actionability</p>
+            <p style={textStyle}>
+              {getActionabilityLabel(item.result.analysis.actionability)}
+            </p>
+          </div>
+          <div>
+            <p style={{ ...textStyle, fontWeight: 700 }}>Reply</p>
+            <p style={textStyle}>{getReplyNeededLabel(item.result.analysis.replyNeeded)}</p>
+          </div>
+          {item.result.analysis.workType && (
+            <div>
+              <p style={{ ...textStyle, fontWeight: 700 }}>Work Type</p>
+              <p style={textStyle}>{getWorkTypeLabel(item.result.analysis.workType)}</p>
+            </div>
+          )}
         </div>
 
         <h4 style={{ ...sectionTitleStyle, fontSize: "14px" }}>Issues</h4>
@@ -342,6 +439,95 @@ export function EmailDetail({
         </div>
       )}
 
+      {!item.result.orderContext && pilotMode && item.result.analysis.orderNumber && (
+        <div style={sectionCardStyle}>
+          <h3 style={sectionTitleStyle}>Order Context</h3>
+          <p style={textStyle}>
+            {orderDataMessage ?? "Order data not connected yet. Verify in WMS."}
+          </p>
+        </div>
+      )}
+
+      {pilotMode && (
+        <div style={sectionCardStyle}>
+          <h3 style={sectionTitleStyle}>Queue Actions</h3>
+          <div style={{ ...replyActionsStyle, marginBottom: "12px" }}>
+            {pilotItemView !== "active" && (
+              <button
+                type="button"
+                onClick={onMarkPilotItemActive}
+                style={secondaryButtonStyle}
+              >
+                Back to Active
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={onRecomputePriority}
+              style={secondaryButtonStyle}
+            >
+              Recompute Priority
+            </button>
+            <button
+              type="button"
+              onClick={onMarkPilotItemDone}
+              style={{
+                ...secondaryButtonStyle,
+                backgroundColor: pilotItemView === "done" ? "#dcfce7" : "#ffffff",
+                color: pilotItemView === "done" ? "#166534" : "#0f172a",
+              }}
+            >
+              Done
+            </button>
+            <button
+              type="button"
+              onClick={onMarkPilotItemNotRelevant}
+              style={{
+                ...secondaryButtonStyle,
+                backgroundColor: pilotItemView === "not_relevant" ? "#e2e8f0" : "#ffffff",
+                color: pilotItemView === "not_relevant" ? "#475569" : "#0f172a",
+              }}
+            >
+              Not Relevant
+            </button>
+            <button
+              type="button"
+              onClick={onSnoozePilotItemUntilTomorrow}
+              style={{
+                ...secondaryButtonStyle,
+                backgroundColor: pilotItemView === "snoozed" ? "#dbeafe" : "#ffffff",
+                color: pilotItemView === "snoozed" ? "#1d4ed8" : "#0f172a",
+              }}
+            >
+              Snooze to Tomorrow
+            </button>
+            <button
+              type="button"
+              onClick={onMarkPilotItemWaitingOnCustomer}
+              style={{
+                ...secondaryButtonStyle,
+                backgroundColor: pilotItemView === "waiting_on_customer" ? "#fef3c7" : "#ffffff",
+                color: pilotItemView === "waiting_on_customer" ? "#92400e" : "#0f172a",
+              }}
+            >
+              Waiting on Customer
+            </button>
+          </div>
+          <p style={{ ...textStyle, fontSize: "12px", color: "#64748b" }}>
+            Current state:{" "}
+            {pilotItemView === "waiting_on_customer"
+              ? "Waiting on Customer"
+              : pilotItemView === "not_relevant"
+                ? "Not Relevant"
+                : pilotItemView === "snoozed"
+                  ? "Snoozed"
+                  : pilotItemView === "done"
+                    ? "Done"
+                    : "Active"}
+          </p>
+        </div>
+      )}
+
       <div style={sectionCardStyle}>
         <div
           style={{
@@ -355,6 +541,75 @@ export function EmailDetail({
         >
           <h3 style={{ ...sectionTitleStyle, margin: 0 }}>Reply Draft</h3>
           <div style={replyActionsStyle}>
+            <button
+              type="button"
+              onClick={() => {
+                if (!canOpenOutlook) {
+                  return;
+                }
+
+                window.open(buildOutlookSearchUrl(item), "_blank");
+              }}
+              disabled={!canOpenOutlook}
+              style={{
+                ...secondaryButtonStyle,
+                backgroundColor: canOpenOutlook ? "#ffffff" : "#e2e8f0",
+                color: canOpenOutlook ? "#0f172a" : "#64748b",
+                cursor: canOpenOutlook ? "pointer" : "not-allowed",
+              }}
+            >
+              Open in Outlook
+            </button>
+            <button
+              type="button"
+              onClick={onCopyCaseForReview}
+              style={{
+                ...secondaryButtonStyle,
+                backgroundColor:
+                  caseCopyFeedback === "success"
+                    ? "#dcfce7"
+                    : caseCopyFeedback === "error"
+                      ? "#fee2e2"
+                      : "#ffffff",
+                color:
+                  caseCopyFeedback === "success"
+                    ? "#166534"
+                    : caseCopyFeedback === "error"
+                      ? "#991b1b"
+                      : "#0f172a",
+              }}
+            >
+              {caseCopyFeedback === "success"
+                ? "Case Copied!"
+                : caseCopyFeedback === "error"
+                  ? "Copy Failed"
+                  : "Copy Case for Review"}
+            </button>
+            <button
+              type="button"
+              onClick={onCopyRawCaseJson}
+              style={{
+                ...secondaryButtonStyle,
+                backgroundColor:
+                  rawCaseCopyFeedback === "success"
+                    ? "#dcfce7"
+                    : rawCaseCopyFeedback === "error"
+                      ? "#fee2e2"
+                      : "#ffffff",
+                color:
+                  rawCaseCopyFeedback === "success"
+                    ? "#166534"
+                    : rawCaseCopyFeedback === "error"
+                      ? "#991b1b"
+                      : "#0f172a",
+              }}
+            >
+              {rawCaseCopyFeedback === "success"
+                ? "JSON Copied!"
+                : rawCaseCopyFeedback === "error"
+                  ? "Copy Failed"
+                  : "Copy Raw Case JSON"}
+            </button>
             <button
               type="button"
               onClick={onRegenerateReply}
@@ -394,31 +649,47 @@ export function EmailDetail({
               {!hasReplyDraft
                 ? "No Reply Draft"
                 : copyFeedback === "success"
-                ? "Copied!"
-                : copyFeedback === "error"
-                  ? "Clipboard Unavailable"
-                  : "Copy Reply"}
+                  ? "Copied!"
+                  : copyFeedback === "error"
+                    ? "Clipboard Unavailable"
+                    : "Copy Reply"}
             </button>
           </div>
         </div>
-        <div
-          style={{
-            marginBottom: "12px",
-            border: "1px solid #e2e8f0",
-            borderRadius: "12px",
-            backgroundColor: "#f8fafc",
-            padding: "12px 14px",
-          }}
-        >
-          <p style={{ ...textStyle, fontSize: "12px", fontWeight: 700, color: "#64748b" }}>
-            Why this draft?
-          </p>
-          <p style={{ ...textStyle, marginTop: "4px" }}>
-            <strong>{getIssueTypeLabel(draftIssueType)}:</strong>{" "}
-            {getIssueTypeDraftExplanation(draftIssueType)}
-          </p>
-        </div>
-        <pre style={bodyBlockStyle}>{item.result.replyDraft || "No draft reply available."}</pre>
+        {item.result.replyDraft && (
+          <div
+            style={{
+              marginBottom: "12px",
+              border: "1px solid #e2e8f0",
+              borderRadius: "12px",
+              backgroundColor: "#f8fafc",
+              padding: "12px 14px",
+            }}
+          >
+            <p style={{ ...textStyle, fontSize: "12px", fontWeight: 700, color: "#64748b" }}>
+              Why this draft?
+            </p>
+            <p style={{ ...textStyle, marginTop: "4px" }}>
+              <strong>{getIssueTypeLabel(draftIssueType)}:</strong>{" "}
+              {getIssueTypeDraftExplanation(draftIssueType)}
+            </p>
+          </div>
+        )}
+        {item.result.replyDraft ? (
+          <pre style={bodyBlockStyle}>{item.result.replyDraft}</pre>
+        ) : (
+          <div
+            style={{
+              ...bodyBlockStyle,
+              fontStyle: "italic",
+              color: "#475569",
+            }}
+          >
+            {item.result.analysis.replyNeeded === "no"
+              ? "Reply not recommended for this message."
+              : "No draft reply available."}
+          </div>
+        )}
         {copyFeedback === "error" && (
           <p style={{ ...textStyle, marginTop: "10px" }}>
             Clipboard access is not available in this browser context. Copy the draft manually.
@@ -431,7 +702,37 @@ export function EmailDetail({
         )}
       </div>
 
-      {item.result.warning && (
+      {pilotMode && (
+        <div style={sectionCardStyle}>
+          <h3 style={sectionTitleStyle}>Was this helpful?</h3>
+          <div style={replyActionsStyle}>
+            <button
+              type="button"
+              onClick={() => onSetPilotUsefulness("helpful")}
+              style={{
+                ...secondaryButtonStyle,
+                backgroundColor: pilotItemState?.usefulness === "helpful" ? "#dcfce7" : "#ffffff",
+                color: pilotItemState?.usefulness === "helpful" ? "#166534" : "#0f172a",
+              }}
+            >
+              Helpful
+            </button>
+            <button
+              type="button"
+              onClick={() => onSetPilotUsefulness("not_helpful")}
+              style={{
+                ...secondaryButtonStyle,
+                backgroundColor: pilotItemState?.usefulness === "not_helpful" ? "#fee2e2" : "#ffffff",
+                color: pilotItemState?.usefulness === "not_helpful" ? "#991b1b" : "#0f172a",
+              }}
+            >
+              Not Helpful
+            </button>
+          </div>
+        </div>
+      )}
+
+      {item.result.warning && !(pilotMode && item.result.analysis.orderNumber && !item.result.orderContext) && (
         <div
           style={{
             border: "1px solid #f59e0b",

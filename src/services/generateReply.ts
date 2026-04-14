@@ -1,17 +1,92 @@
 import { deriveIssueType } from "../domain/issueType";
 import type { EmailAnalysis, OrderContext } from "../types/actionDesk";
+import {
+  getIdentifierReferenceLabel,
+  getIdentifierReviewLabel,
+  hasCaseIdentifiers,
+} from "./caseIdentifiers";
 
 export function generateReply(
   analysis: EmailAnalysis,
   order?: OrderContext,
 ): string {
+  if (
+    (analysis.workType && analysis.workType !== "customer_support") ||
+    analysis.actionability !== "action_required" ||
+    !analysis.hasClearRequest ||
+    (analysis.isThreadContinuation && !analysis.hasClearRequest) ||
+    analysis.replyNeeded === "no" ||
+    analysis.messageType === "internal_alert"
+  ) {
+    return "";
+  }
+
   const issueType = deriveIssueType(analysis, order);
+  const hasIdentifiers = hasCaseIdentifiers(analysis);
+  const referenceLabel = getIdentifierReferenceLabel(analysis);
+  const reviewLabel = getIdentifierReviewLabel(analysis);
 
   if (issueType === "missing_order") {
     return "Hello,\n\nI can help with that. Please send over your order number, or the best identifying details from the confirmation, so I can look up the shipment and share the latest status.\n\nBest,\nSupport Team";
   }
 
   if (!order) {
+    if (analysis.intent === "cancellation_request") {
+      return "Hello,\n\nI can help with that. We are reviewing the cancellation request now and will confirm back once those items have been canceled, or let you know right away if we need any additional details.\n\nBest,\nSupport Team";
+    }
+
+    if (analysis.intent === "address_change") {
+      return "Hello,\n\nI can help with that. We are reviewing the requested order detail change now and will confirm the next step shortly.\n\nBest,\nSupport Team";
+    }
+
+    if (analysis.intent === "billing_question") {
+      return "Hello,\n\nI can help with that. We are reviewing the billing details now and will send a follow-up once we confirm the correct next step.\n\nBest,\nSupport Team";
+    }
+
+    if (analysis.intent === "operational_confirmation") {
+      const timingLine = analysis.hasOperationalTimingSignal
+        ? "We have received the inbound logistics details and will confirm back once the container or delivery event is completed."
+        : "We have received the inbound logistics details and will confirm back once the requested container or delivery step is completed.";
+
+      return `Hello,\n\nThank you for the update. ${timingLine}\n\nBest,\nSupport Team`;
+    }
+
+    if (analysis.intent === "general_support") {
+      if (analysis.hasConfirmationRequest && analysis.hasLogisticsContext) {
+        const timingLine = analysis.hasOperationalTimingSignal
+          ? "We have received the inbound logistics details and will confirm back once the container or delivery event is completed."
+          : "We have received the logistics details and will confirm back once the requested operational step is completed.";
+
+        return `Hello,\n\nThank you for the update. ${timingLine}\n\nBest,\nSupport Team`;
+      }
+
+      if (analysis.hasDeadlineRequest) {
+        const timingLine =
+          analysis.deadlineState === "past_due"
+            ? "I understand the requested ship timing may already have passed. We are reviewing the current status now and will follow up as soon as we confirm the next step."
+            : "I understand the timing is important. We are reviewing the current ship timing now and will follow up as soon as we confirm the latest details.";
+
+        return `Hello,\n\nI can help with that. ${timingLine}\n\nBest,\nSupport Team`;
+      }
+
+      return "Hello,\n\nI can help with that. We are reviewing your request now and will follow up shortly with the next step.\n\nBest,\nSupport Team";
+    }
+
+    if (hasIdentifiers) {
+      const reviewLine =
+        analysis.hasDeadlineRequest
+          ? analysis.deadlineState === "past_due"
+            ? `I understand the requested timing may already have passed. I am reviewing the current status for ${referenceLabel ?? reviewLabel} now and will follow up as soon as I confirm the next step.`
+            : `I understand the timing is important. I am reviewing the current ship timing for ${referenceLabel ?? reviewLabel} now and will follow up as soon as I confirm the latest details.`
+          : analysis.intent === "where_is_my_order" && analysis.orderNumber
+          ? `I am checking the latest status tied to ${referenceLabel ?? reviewLabel} and will follow up as soon as I confirm the current details.`
+          : analysis.intent === "where_is_my_order"
+            ? `I am reviewing ${reviewLabel} now and will follow up shortly with the next step.`
+          : `I am reviewing ${reviewLabel} now and will follow up shortly with the next step.`;
+
+      return `Hello,\n\nI can help with that. ${reviewLine}\n\nBest,\nSupport Team`;
+    }
+
     const concernLine = getConcernLine(issueType, analysis.risks.length > 0);
     const reviewLine =
       issueType === "delivered_not_received"

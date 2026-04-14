@@ -1,9 +1,23 @@
 import type { EmailAnalysis } from "../types/actionDesk";
 import type { IntentCode, RiskCode } from "../types/actionDesk";
+import { parseAnalysisInput } from "./analysisInput";
+import {
+  extractCaseIdentifiers,
+  getIdentifierReferenceLabel,
+  getPrimaryOrderNumber,
+} from "./caseIdentifiers";
+import {
+  extractLatestMessageText,
+  getLatestUrgencySignal,
+  hasConfirmationRequest,
+  hasClearRequest,
+  hasLogisticsCoordinationSignals,
+  hasOperationalTimingSignal,
+  hasShippingDeadlineRequest,
+  isInternalOperationsThread,
+} from "./emailWorkHeuristics";
 import { generateRecommendedAction } from "./generateRecommendedAction";
-
-const ORDER_NUMBER_REGEX = /\bORD-\d+\b/i;
-const HIGH_URGENCY_KEYWORDS = ["urgent", "asap", "immediately"];
+import { refineEmailAnalysis } from "./refineEmailAnalysis";
 const LOW_URGENCY_KEYWORDS = [
   "for your information",
   "fyi",
@@ -13,73 +27,125 @@ const LOW_URGENCY_KEYWORDS = [
 ];
 
 export function analyzeEmail(email: string): EmailAnalysis {
-  const normalizedEmail = email.toLowerCase();
-  const orderNumberMatch = email.match(ORDER_NUMBER_REGEX);
-  const orderNumber = orderNumberMatch?.[0]?.toUpperCase();
+  const parsedInput = parseAnalysisInput(email);
+  const emailText = parsedInput.body || email;
+  const fullText = parsedInput.fullText || emailText;
+  const normalizedEmail = fullText.toLowerCase();
+  const latestMessageText = extractLatestMessageText(emailText);
+  const normalizedLatestMessage = (latestMessageText || fullText).toLowerCase();
+  const caseIdentifiers = extractCaseIdentifiers({
+    subject: parsedInput.subject,
+    latestMessageText,
+    bodyText: emailText,
+  });
+  const orderNumber = getPrimaryOrderNumber(caseIdentifiers);
+  const hasDeadlineRequest = hasShippingDeadlineRequest(normalizedLatestMessage);
+  const confirmationRequest = hasConfirmationRequest(normalizedLatestMessage);
+  const logisticsContext = hasLogisticsCoordinationSignals(normalizedLatestMessage);
+  const operationalTimingSignal =
+    hasDeadlineRequest || hasOperationalTimingSignal(normalizedLatestMessage);
 
-  const intent = getIntent(normalizedEmail);
-  const urgency = getUrgency(normalizedEmail);
+  const intent = getIntent(normalizedLatestMessage, normalizedEmail);
+  const urgency = getUrgency(normalizedLatestMessage, normalizedEmail);
   const confidence = getConfidence(intent, orderNumber);
-  const risks = getRisks(normalizedEmail);
-  const summary = getSummary(intent, urgency, orderNumber);
+  const risks = getRisks(normalizedLatestMessage);
+  const summary = getSummary(intent, urgency, normalizedLatestMessage, {
+    orderNumber,
+    caseIdentifiers,
+  });
   const nextAction = generateRecommendedAction({
     intent,
     urgency,
     risks,
     orderNumber,
+    caseIdentifiers,
+    hasDeadlineRequest,
   });
 
-  return {
+  const analysis: EmailAnalysis = {
     summary,
     intent,
     urgency,
     confidence,
     orderNumber,
+    caseIdentifiers,
+    hasDeadlineRequest,
+    deadlineState: hasDeadlineRequest ? "current" : "none",
     risks,
     nextAction,
+    hasConfirmationRequest: confirmationRequest,
+    hasLogisticsContext: logisticsContext,
+    hasOperationalTimingSignal: operationalTimingSignal,
   };
+
+  return refineEmailAnalysis(email, analysis);
 }
 
-function getIntent(normalizedEmail: string): IntentCode {
+function getIntent(normalizedLatestMessage: string, normalizedEmail: string): IntentCode {
+  const isInternalOperations = isInternalOperationsThread(normalizedLatestMessage);
   const asksForPod =
-    normalizedEmail.includes("proof of delivery") ||
-    normalizedEmail.includes("pod") ||
-    normalizedEmail.includes("delivery receipt");
+    normalizedLatestMessage.includes("proof of delivery") ||
+    normalizedLatestMessage.includes("pod") ||
+    normalizedLatestMessage.includes("delivery receipt");
   const asksToCancel =
-    normalizedEmail.includes("cancel order") ||
-    normalizedEmail.includes("cancel my order") ||
-    normalizedEmail.includes("cancellation");
+    normalizedLatestMessage.includes("cancel order") ||
+    normalizedLatestMessage.includes("cancel my order") ||
+    normalizedLatestMessage.includes("cancellation") ||
+    normalizedLatestMessage.includes("please cancel") ||
+    normalizedLatestMessage.includes("cancel all") ||
+    normalizedLatestMessage.includes("cancel those") ||
+    normalizedLatestMessage.includes("once canceled") ||
+    normalizedLatestMessage.includes("confirm once canceled");
   const reportsShortShipment =
-    normalizedEmail.includes("short shipment") ||
-    normalizedEmail.includes("missing item") ||
-    normalizedEmail.includes("missing items") ||
-    normalizedEmail.includes("only received");
+    normalizedLatestMessage.includes("short shipment") ||
+    normalizedLatestMessage.includes("missing item") ||
+    normalizedLatestMessage.includes("missing items") ||
+    normalizedLatestMessage.includes("only received");
   const reportsDamage =
-    normalizedEmail.includes("damaged") ||
-    normalizedEmail.includes("broken") ||
-    normalizedEmail.includes("arrived crushed");
+    normalizedLatestMessage.includes("damaged") ||
+    normalizedLatestMessage.includes("broken") ||
+    normalizedLatestMessage.includes("arrived crushed");
   const asksForAddressChange =
-    normalizedEmail.includes("change the address") ||
-    normalizedEmail.includes("update the address") ||
-    normalizedEmail.includes("wrong address") ||
-    normalizedEmail.includes("shipping address");
+    normalizedLatestMessage.includes("change the address") ||
+    normalizedLatestMessage.includes("update the address") ||
+    normalizedLatestMessage.includes("wrong address") ||
+    normalizedLatestMessage.includes("shipping address") ||
+    normalizedLatestMessage.includes("change details") ||
+    normalizedLatestMessage.includes("modify order") ||
+    normalizedLatestMessage.includes("correct shipping details");
   const reportsDuplicateShipment =
-    normalizedEmail.includes("duplicate shipment") ||
-    normalizedEmail.includes("duplicate order") ||
-    normalizedEmail.includes("received two") ||
-    normalizedEmail.includes("sent twice");
+    normalizedLatestMessage.includes("duplicate shipment") ||
+    normalizedLatestMessage.includes("duplicate order") ||
+    normalizedLatestMessage.includes("received two") ||
+    normalizedLatestMessage.includes("sent twice");
   const asksBillingQuestion =
-    normalizedEmail.includes("invoice") ||
-    normalizedEmail.includes("billing") ||
-    normalizedEmail.includes("charged") ||
-    normalizedEmail.includes("charge") ||
-    normalizedEmail.includes("bill");
+    normalizedLatestMessage.includes("invoice") ||
+    normalizedLatestMessage.includes("billing") ||
+    normalizedLatestMessage.includes("charged") ||
+    normalizedLatestMessage.includes("charge") ||
+    normalizedLatestMessage.includes("bill");
   const asksForStatus =
-    normalizedEmail.includes("status") ||
-    normalizedEmail.includes("update") ||
-    normalizedEmail.includes("where is my order") ||
-    normalizedEmail.includes("track") ||
-    normalizedEmail.includes("shipment");
+    normalizedLatestMessage.includes("status") ||
+    normalizedLatestMessage.includes("where is my order") ||
+    normalizedLatestMessage.includes("track") ||
+    normalizedLatestMessage.includes("shipment") ||
+    normalizedLatestMessage.includes("shipping") ||
+    normalizedLatestMessage.includes("ship today") ||
+    hasShippingDeadlineRequest(normalizedLatestMessage);
+  const asksForGeneralUpdate =
+    normalizedLatestMessage.includes("please update") ||
+    normalizedLatestMessage.includes("send me") ||
+    normalizedLatestMessage.includes("let me know once");
+  const hasExplicitConfirmationRequest = hasConfirmationRequest(normalizedLatestMessage);
+  const hasLogisticsContext = hasLogisticsCoordinationSignals(normalizedLatestMessage);
+
+  if (isInternalOperations) {
+    return "general_support";
+  }
+
+  if (hasExplicitConfirmationRequest && hasLogisticsContext) {
+    return "operational_confirmation";
+  }
 
   if (asksForPod) {
     return "pod_request";
@@ -105,20 +171,66 @@ function getIntent(normalizedEmail: string): IntentCode {
     return "billing_question";
   }
 
-  if (asksForStatus || reportsDuplicateShipment) {
+  if ((asksForStatus || reportsDuplicateShipment) && !asksForGeneralUpdate) {
+    return "where_is_my_order";
+  }
+
+  if (
+    asksForGeneralUpdate &&
+    (normalizedEmail.includes("order") || normalizedEmail.includes("shipment") || normalizedEmail.includes("tracking"))
+  ) {
     return "where_is_my_order";
   }
 
   return "general_support";
 }
 
-function getUrgency(normalizedEmail: string): EmailAnalysis["urgency"] {
-  if (HIGH_URGENCY_KEYWORDS.some((keyword) => normalizedEmail.includes(keyword))) {
+function getUrgency(
+  normalizedLatestMessage: string,
+  normalizedEmail: string,
+): EmailAnalysis["urgency"] {
+  const latestUrgencySignal = getLatestUrgencySignal(normalizedLatestMessage);
+  const hasDeadlineRequest = hasShippingDeadlineRequest(normalizedLatestMessage);
+  const confirmationRequest = hasConfirmationRequest(normalizedLatestMessage);
+  const logisticsContext = hasLogisticsCoordinationSignals(normalizedLatestMessage);
+  const operationalTimingSignal = hasOperationalTimingSignal(normalizedLatestMessage);
+
+  if (isInternalOperationsThread(normalizedLatestMessage)) {
+    return "low";
+  }
+
+  if (
+    LOW_URGENCY_KEYWORDS.some((keyword) => normalizedLatestMessage.includes(keyword)) &&
+    !hasClearRequest(normalizedLatestMessage)
+  ) {
+    return "low";
+  }
+
+  if (latestUrgencySignal === "high" && (hasClearRequest(normalizedLatestMessage) || hasDeadlineRequest)) {
     return "high";
   }
 
-  if (LOW_URGENCY_KEYWORDS.some((keyword) => normalizedEmail.includes(keyword))) {
-    return "low";
+  if (latestUrgencySignal === "medium" && (hasClearRequest(normalizedLatestMessage) || hasDeadlineRequest)) {
+    return "medium";
+  }
+
+  if (hasDeadlineRequest) {
+    return normalizedLatestMessage.includes("today") ||
+      normalizedLatestMessage.includes("tomorrow") ||
+      normalizedLatestMessage.includes("overnight") ||
+      normalizedLatestMessage.includes("same day")
+      ? "high"
+      : "medium";
+  }
+
+  if (confirmationRequest && logisticsContext) {
+    return latestUrgencySignal === "high" || operationalTimingSignal ? "high" : "medium";
+  }
+
+  if (hasClearRequest(normalizedLatestMessage)) {
+    return latestUrgencySignal === "high" || normalizedEmail.includes("urgent") || normalizedEmail.includes("asap")
+      ? "high"
+      : "medium";
   }
 
   return "medium";
@@ -139,76 +251,86 @@ function getConfidence(
   return "low";
 }
 
-function getRisks(normalizedEmail: string): RiskCode[] {
+function getRisks(normalizedLatestMessage: string): RiskCode[] {
+  if (isInternalOperationsThread(normalizedLatestMessage)) {
+    return [];
+  }
+
   const risks: RiskCode[] = [];
 
-  if (normalizedEmail.includes("waiting for several days") || normalizedEmail.includes("no update")) {
+  if (normalizedLatestMessage.includes("waiting for several days") || normalizedLatestMessage.includes("no update")) {
     risks.push("delay_or_no_tracking_update");
   }
 
-  if (normalizedEmail.includes("frustrated")) {
+  if (normalizedLatestMessage.includes("frustrated")) {
     risks.push("customer_frustration");
   }
 
   if (
-    normalizedEmail.includes("still have not received") ||
-    normalizedEmail.includes("did not receive") ||
-    normalizedEmail.includes("not received")
+    normalizedLatestMessage.includes("still have not received") ||
+    normalizedLatestMessage.includes("did not receive") ||
+    normalizedLatestMessage.includes("not received")
   ) {
     risks.push("delivered_not_received");
   }
 
   if (
-    normalizedEmail.includes("proof of delivery") ||
-    normalizedEmail.includes("pod") ||
-    normalizedEmail.includes("delivery receipt")
+    normalizedLatestMessage.includes("proof of delivery") ||
+    normalizedLatestMessage.includes("pod") ||
+    normalizedLatestMessage.includes("delivery receipt")
   ) {
     risks.push("pod_needed");
   }
 
-  if (normalizedEmail.includes("cancel order") || normalizedEmail.includes("cancel my order")) {
+  if (
+    normalizedLatestMessage.includes("cancel order") ||
+    normalizedLatestMessage.includes("cancel my order") ||
+    normalizedLatestMessage.includes("please cancel") ||
+    normalizedLatestMessage.includes("cancel all") ||
+    normalizedLatestMessage.includes("once canceled")
+  ) {
     risks.push("cancellation_review_needed");
   }
 
   if (
-    normalizedEmail.includes("short shipment") ||
-    normalizedEmail.includes("missing item") ||
-    normalizedEmail.includes("missing items") ||
-    normalizedEmail.includes("only received")
+    normalizedLatestMessage.includes("short shipment") ||
+    normalizedLatestMessage.includes("missing item") ||
+    normalizedLatestMessage.includes("missing items") ||
+    normalizedLatestMessage.includes("only received")
   ) {
     risks.push("missing_items_reported");
   }
 
   if (
-    normalizedEmail.includes("damaged") ||
-    normalizedEmail.includes("broken") ||
-    normalizedEmail.includes("arrived crushed")
+    normalizedLatestMessage.includes("damaged") ||
+    normalizedLatestMessage.includes("broken") ||
+    normalizedLatestMessage.includes("arrived crushed")
   ) {
     risks.push("damage_reported");
   }
 
   if (
-    normalizedEmail.includes("change the address") ||
-    normalizedEmail.includes("update the address") ||
-    normalizedEmail.includes("wrong address")
+    normalizedLatestMessage.includes("change the address") ||
+    normalizedLatestMessage.includes("update the address") ||
+    normalizedLatestMessage.includes("wrong address")
   ) {
     risks.push("address_correction_needed");
   }
 
   if (
-    normalizedEmail.includes("duplicate shipment") ||
-    normalizedEmail.includes("duplicate order") ||
-    normalizedEmail.includes("received two") ||
-    normalizedEmail.includes("sent twice")
+    normalizedLatestMessage.includes("duplicate shipment") ||
+    normalizedLatestMessage.includes("duplicate order") ||
+    normalizedLatestMessage.includes("received two") ||
+    normalizedLatestMessage.includes("sent twice")
   ) {
     risks.push("duplicate_shipment_possible");
   }
 
   if (
-    normalizedEmail.includes("invoice") ||
-    normalizedEmail.includes("billing") ||
-    normalizedEmail.includes("charged") ||
-    normalizedEmail.includes("charge")
+    normalizedLatestMessage.includes("invoice") ||
+    normalizedLatestMessage.includes("billing") ||
+    normalizedLatestMessage.includes("charged") ||
+    normalizedLatestMessage.includes("charge")
   ) {
     risks.push("billing_discrepancy");
   }
@@ -219,48 +341,70 @@ function getRisks(normalizedEmail: string): RiskCode[] {
 function getSummary(
   intent: IntentCode,
   urgency: EmailAnalysis["urgency"],
-  orderNumber?: string,
+  normalizedLatestMessage: string,
+  analysis: Pick<EmailAnalysis, "orderNumber" | "caseIdentifiers">,
 ): string {
+  const referenceLabel = getIdentifierReferenceLabel(analysis);
+  const hasDeadlineRequest = hasShippingDeadlineRequest(normalizedLatestMessage);
+
   if (intent === "pod_request") {
-    return orderNumber
-      ? `Customer is requesting proof of delivery for order ${orderNumber}.`
-      : "Customer is requesting proof of delivery but did not provide an order number.";
+    return referenceLabel
+      ? `Customer is requesting proof of delivery for ${referenceLabel}.`
+      : "Customer is requesting proof of delivery but did not include a usable identifier.";
   }
 
   if (intent === "cancellation_request") {
-    return orderNumber
-      ? `Customer wants to cancel order ${orderNumber}.`
-      : "Customer wants to cancel an order but did not include the order number.";
+    return referenceLabel
+      ? `Customer wants to cancel ${referenceLabel}.`
+      : "Customer wants to cancel an order and is asking for confirmation.";
   }
 
   if (intent === "short_shipment") {
-    return orderNumber
-      ? `Customer reports missing items from order ${orderNumber}.`
+    return referenceLabel
+      ? `Customer reports missing items tied to ${referenceLabel}.`
       : "Customer reports a short shipment or missing items.";
   }
 
   if (intent === "damaged_shipment") {
-    return orderNumber
-      ? `Customer reports damage on order ${orderNumber}.`
+    return referenceLabel
+      ? `Customer reports damage tied to ${referenceLabel}.`
       : "Customer reports a damaged shipment.";
   }
 
   if (intent === "address_change") {
-    return orderNumber
-      ? `Customer is requesting an address change for order ${orderNumber}.`
+    return referenceLabel
+      ? `Customer is requesting an address change for ${referenceLabel}.`
       : "Customer wants to update the shipping address.";
   }
 
   if (intent === "billing_question") {
-    return orderNumber
-      ? `Customer has a billing or invoice question for order ${orderNumber}.`
+    return referenceLabel
+      ? `Customer has a billing or invoice question tied to ${referenceLabel}.`
       : "Customer has a billing or invoice question.";
   }
 
+  if (intent === "operational_confirmation") {
+    return referenceLabel
+      ? `Customer provided inbound or logistics details for ${referenceLabel} and requested confirmation of receipt or follow-up once the event occurs.`
+      : "Customer provided inbound or logistics details and requested confirmation of receipt or follow-up once the event occurs.";
+  }
+
   if (intent === "where_is_my_order") {
-    return orderNumber
-      ? `Customer is requesting a status update for order ${orderNumber}.`
-      : "Customer is asking for an order update but did not provide an order number.";
+    if (hasDeadlineRequest) {
+      return referenceLabel
+        ? `Customer needs shipping or delivery timing confirmation for ${referenceLabel}.`
+        : "Customer needs shipping or delivery timing confirmation and expects a current update.";
+    }
+
+    return referenceLabel
+      ? `Customer is requesting a status update for ${referenceLabel}.`
+      : "Customer is asking for an order update but did not provide a usable identifier.";
+  }
+
+  if (hasDeadlineRequest) {
+    return referenceLabel
+      ? `Customer needs ship-timing confirmation for ${referenceLabel}.`
+      : "Customer needs ship-timing confirmation and expects a current update.";
   }
 
   if (urgency === "low") {

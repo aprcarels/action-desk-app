@@ -3,15 +3,21 @@ import type { EmailSourceListResult, RawInboxEmail } from "../types/inboxSource"
 
 const DEFAULT_PAGE_SIZE = 6;
 
+function buildPreviewText(bodyText: string): string {
+  return bodyText.replace(/\s+/g, " ").trim();
+}
+
 function mapSeededEmailToRawInboxEmail(seedEmail: (typeof mockEmails)[number]): RawInboxEmail {
   return {
     id: seedEmail.id,
+    externalId: seedEmail.id,
     subject: seedEmail.subject,
     fromName: seedEmail.senderName,
     fromEmail: seedEmail.senderEmail,
     receivedAt: seedEmail.receivedAt,
     bodyText: seedEmail.body,
-    provider: "mock_api",
+    previewText: buildPreviewText(seedEmail.body),
+    provider: "dev_json",
   };
 }
 

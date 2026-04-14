@@ -1,6 +1,12 @@
-import type { Configuration, PopupRequest } from "@azure/msal-browser";
+import type {
+  AccountInfo,
+  Configuration,
+  PopupRequest,
+  SilentRequest,
+} from "@azure/msal-browser";
 
 export const graphMailReadScopes = ["Mail.Read"];
+const MSAL_CALLBACK_PATH = "/auth/popup-callback.html";
 
 type MsalRuntimeConfig = {
   clientId?: string;
@@ -16,6 +22,32 @@ export function getMsalRuntimeConfig(): MsalRuntimeConfig {
     authority: import.meta.env.VITE_AZURE_AUTHORITY,
     redirectUri: import.meta.env.VITE_AZURE_REDIRECT_URI,
   };
+}
+
+function normalizeLocalhostHttps(url: string): string {
+  try {
+    const parsedUrl = new URL(url);
+
+    if (parsedUrl.hostname === "localhost" && parsedUrl.protocol === "http:") {
+      parsedUrl.protocol = "https:";
+      return parsedUrl.toString();
+    }
+
+    return url;
+  } catch {
+    return url;
+  }
+}
+
+function resolveRedirectOrigin(config: MsalRuntimeConfig): string {
+  return normalizeLocalhostHttps(config.redirectUri ?? window.location.origin);
+}
+
+function resolveAuthCallbackRedirectUri(): string {
+  return new URL(
+    MSAL_CALLBACK_PATH,
+    resolveRedirectOrigin(getMsalRuntimeConfig()),
+  ).toString();
 }
 
 function resolveMsalAuthority(config: MsalRuntimeConfig): string | undefined {
@@ -49,21 +81,36 @@ export function createMsalConfiguration(config: MsalRuntimeConfig): Configuratio
     auth: {
       clientId: config.clientId ?? "",
       authority: resolveMsalAuthority(config),
-      redirectUri: config.redirectUri ?? window.location.origin,
+      redirectUri: resolveRedirectOrigin(config),
     },
     cache: {
       cacheLocation: "localStorage",
+    },
+    system: {
+      popupBridgeTimeout: 15000,
+      iframeBridgeTimeout: 15000,
+      redirectNavigationTimeout: 15000,
     },
   };
 }
 
 export function createMailReadPopupRequest(): PopupRequest {
+  const redirectUri = resolveAuthCallbackRedirectUri();
+
+  if (import.meta.env.DEV) {
+    console.info("[Action Desk] MSAL popup redirect URI:", redirectUri);
+  }
+
   return {
     scopes: graphMailReadScopes,
     prompt: "select_account",
-    redirectUri: new URL(
-      "/auth/popup-callback.html",
-      getMsalRuntimeConfig().redirectUri ?? window.location.origin,
-    ).toString(),
+    redirectUri,
+  };
+}
+
+export function createMailReadSilentRequest(account: AccountInfo): SilentRequest {
+  return {
+    scopes: graphMailReadScopes,
+    account,
   };
 }

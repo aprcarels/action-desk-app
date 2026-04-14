@@ -1,0 +1,37 @@
+import type { PriorityBand, QueuePriorityReason } from "./queuePriority";
+import type { QueueWorkStatus } from "./queueStatus";
+
+export type QueueItem = {
+  id: string;
+  queueItemId: string;
+  mailboxMessageId: string;
+  conversationId: string;
+  subject: string;
+  customerName?: string | null;
+  customerEmail: string;
+  orderNumber?: string | null;
+  caseNumber?: string | null;
+  trackingNumber?: string | null;
+  workStatus: QueueWorkStatus;
+  ownerId?: string | null;
+  priorityScore: number;
+  priorityBand: PriorityBand;
+  priorityReasons: QueuePriorityReason[];
+  category?: string | null;
+  issueType?: string | null;
+  summary?: string | null;
+  recommendedAction?: string | null;
+  replyDraft?: string | null;
+  warnings: string[];
+  isActive: boolean;
+  isResolved: boolean;
+  snoozedUntil?: string | null;
+  completedAt?: string | null;
+  deferredUntil?: string | null;
+  firstSeenAt: string;
+  latestCustomerMessageAt: string;
+  lastSyncedAt: string;
+  lastEvaluatedAt?: string | null;
+  updatedAt: string;
+  createdAt: string;
+};
