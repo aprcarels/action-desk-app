@@ -5,6 +5,10 @@ let cachedAccount = null;
 let cachedToken = null;
 let tokenExpiresAt = 0;
 
+function isDeviceCodeAuthEnabled() {
+  return process.env.ACTION_DESK_ENABLE_DEVICE_CODE_AUTH === "true";
+}
+
 function getRequiredEnv(name) {
   const value = process.env[name];
   if (!value || !value.trim()) {
@@ -33,6 +37,12 @@ function getMsalApp() {
 }
 
 async function signInDesktop() {
+  if (!isDeviceCodeAuthEnabled()) {
+    throw new Error(
+      "Device-code desktop auth is disabled. Use the normal Microsoft sign-in popup instead.",
+    );
+  }
+
   const app = getMsalApp();
 
   const result = await app.acquireTokenByDeviceCode({
@@ -56,7 +66,9 @@ async function signInDesktop() {
 
   cachedAccount = result.account;
   cachedToken = result.accessToken;
-  tokenExpiresAt = result.expiresOn ? result.expiresOn.getTime() : Date.now() + 3600 * 1000;
+  tokenExpiresAt = result.expiresOn
+    ? result.expiresOn.getTime()
+    : Date.now() + 3600 * 1000;
 
   return {
     username: result.account.username || "",
@@ -65,6 +77,12 @@ async function signInDesktop() {
 }
 
 async function getDesktopAccessToken() {
+  if (!isDeviceCodeAuthEnabled()) {
+    throw new Error(
+      "Device-code desktop auth is disabled. Use the normal Microsoft sign-in popup instead.",
+    );
+  }
+
   const now = Date.now();
 
   if (cachedToken && tokenExpiresAt > now + 60 * 1000) {
@@ -87,12 +105,15 @@ async function getDesktopAccessToken() {
   }
 
   cachedToken = result.accessToken;
-  tokenExpiresAt = result.expiresOn ? result.expiresOn.getTime() : Date.now() + 3600 * 1000;
+  tokenExpiresAt = result.expiresOn
+    ? result.expiresOn.getTime()
+    : Date.now() + 3600 * 1000;
 
   return cachedToken;
 }
 
 module.exports = {
+  isDeviceCodeAuthEnabled,
   signInDesktop,
   getDesktopAccessToken,
 };

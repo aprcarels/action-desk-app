@@ -4,6 +4,7 @@ declare global {
   interface Window {
     actionDeskDesktop?: {
       isElectron?: boolean;
+      deviceCodeAuthEnabled?: boolean;
       ingestRawEmails?: (rawEmails: unknown[]) => Promise<{
         queueItems: unknown[];
       }>;

@@ -1,7 +1,11 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
+const deviceCodeAuthEnabled =
+  process.env.ACTION_DESK_ENABLE_DEVICE_CODE_AUTH === "true";
+
 contextBridge.exposeInMainWorld("actionDeskDesktop", {
   isElectron: true,
+  deviceCodeAuthEnabled,
 
   ingestRawEmails: (rawEmails) =>
     ipcRenderer.invoke("actionDesk:queue:ingestRawEmails", rawEmails),
@@ -27,9 +31,11 @@ contextBridge.exposeInMainWorld("actionDeskDesktop", {
   markResolved: (queueItemId) =>
     ipcRenderer.invoke("actionDesk:queue:markResolved", queueItemId),
 
-  signIn: () =>
-    ipcRenderer.invoke("actionDesk:auth:signIn"),
+  signIn: deviceCodeAuthEnabled
+    ? () => ipcRenderer.invoke("actionDesk:auth:signIn")
+    : undefined,
 
-  getAccessToken: () =>
-    ipcRenderer.invoke("actionDesk:auth:getAccessToken"),
+  getAccessToken: deviceCodeAuthEnabled
+    ? () => ipcRenderer.invoke("actionDesk:auth:getAccessToken")
+    : undefined,
 });

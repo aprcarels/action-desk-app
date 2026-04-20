@@ -23,6 +23,7 @@ const {
 } = require("../dist-electron/mappers/mapRawInboxEmailToMailboxMessage");
 
 const {
+  isDeviceCodeAuthEnabled,
   signInDesktop,
   getDesktopAccessToken,
 } = require("./auth.cjs");
@@ -121,17 +122,23 @@ app.whenReady().then(() => {
     return getDesktopRuntimeInfo();
   });
 
-  ipcMain.handle("actionDesk:auth:signIn", async () => {
-    console.log("[Electron] actionDesk:auth:signIn called");
-    return signInDesktop();
-  });
+  if (isDeviceCodeAuthEnabled()) {
+    console.warn(
+      "[Electron] ACTION_DESK_ENABLE_DEVICE_CODE_AUTH=true; enabling device-code auth fallback.",
+    );
 
-  ipcMain.handle("actionDesk:auth:getAccessToken", async () => {
-    console.log("[Electron] actionDesk:auth:getAccessToken called");
-    return getDesktopAccessToken();
-  });
+    ipcMain.handle("actionDesk:auth:signIn", async () => {
+      console.log("[Electron] actionDesk:auth:signIn called");
+      return signInDesktop();
+    });
 
-    ipcMain.handle("actionDesk:queue:ingestRawEmails", async (_, rawInput) => {
+    ipcMain.handle("actionDesk:auth:getAccessToken", async () => {
+      console.log("[Electron] actionDesk:auth:getAccessToken called");
+      return getDesktopAccessToken();
+    });
+  }
+
+  ipcMain.handle("actionDesk:queue:ingestRawEmails", async (_, rawInput) => {
     const rawEmails = normalizeRawEmailArray(rawInput);
 
     console.log(
@@ -160,6 +167,7 @@ app.whenReady().then(() => {
       queueItems,
     };
   });
+
   ipcMain.handle("actionDesk:queue:load", async (_, options) => {
     const rawInbox = await loadRawInboxQueue(options);
     const rawEmails = normalizeRawEmailArray(rawInbox);

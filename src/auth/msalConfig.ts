@@ -40,7 +40,7 @@ function normalizeLocalhostHttps(url: string): string {
   }
 }
 
-function resolveRedirectOrigin(config: MsalRuntimeConfig): string {
+function resolveRedirectBaseUrl(config: MsalRuntimeConfig): string {
   const fallbackOrigin =
     typeof window !== "undefined" && window.location?.origin
       ? window.location.origin
@@ -49,10 +49,10 @@ function resolveRedirectOrigin(config: MsalRuntimeConfig): string {
   return normalizeLocalhostHttps(config.redirectUri ?? fallbackOrigin);
 }
 
-function resolveAuthCallbackRedirectUri(): string {
+function resolveAuthCallbackRedirectUri(config: MsalRuntimeConfig): string {
   return new URL(
     MSAL_CALLBACK_PATH,
-    resolveRedirectOrigin(getMsalRuntimeConfig()),
+    resolveRedirectBaseUrl(config),
   ).toString();
 }
 
@@ -83,11 +83,13 @@ export function describeMissingMsalConfig(config: MsalRuntimeConfig): string[] {
 }
 
 export function createMsalConfiguration(config: MsalRuntimeConfig): Configuration {
+  const redirectUri = resolveAuthCallbackRedirectUri(config);
+
   return {
     auth: {
       clientId: config.clientId ?? "",
       authority: resolveMsalAuthority(config),
-      redirectUri: resolveRedirectOrigin(config),
+      redirectUri,
     },
     cache: {
       cacheLocation: "localStorage",
@@ -101,7 +103,7 @@ export function createMsalConfiguration(config: MsalRuntimeConfig): Configuratio
 }
 
 export function createMailReadPopupRequest(): PopupRequest {
-  const redirectUri = resolveAuthCallbackRedirectUri();
+  const redirectUri = resolveAuthCallbackRedirectUri(getMsalRuntimeConfig());
 
   if (getEnv("DEV") === "true") {
     console.info("[Action Desk] MSAL popup redirect URI:", redirectUri);

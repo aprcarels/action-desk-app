@@ -1,130 +1,225 @@
-import { PublicClientApplication } from "@azure/msal-browser";
 import {
-  createMsalConfiguration,
+  type AuthenticationResult,
+  BrowserAuthError,
+  BrowserAuthErrorCodes,
+  InteractionRequiredAuthError,
+  PublicClientApplication,
+} from "@azure/msal-browser";
+import {
   createMailReadPopupRequest,
   createMailReadSilentRequest,
+  createMsalConfiguration,
+  describeMissingMsalConfig,
   getMsalRuntimeConfig,
 } from "./msalConfig";
 
-let msalInstance: PublicClientApplication | null = null;
-let msalInitializePromise: Promise<PublicClientApplication> | null = null;
-let desktopSignInPromise: Promise<void> | null = null;
+const MISSING_AUTH_CONFIGURATION_MESSAGE =
+  "Microsoft mailbox access is not configured. Add VITE_AZURE_CLIENT_ID and VITE_AZURE_TENANT_ID or VITE_AZURE_AUTHORITY.";
+const SIGN_IN_FAILED_MESSAGE =
+  "Microsoft sign-in could not be completed. Please sign in again and allow Mail.Read access.";
+const TOKEN_ACQUISITION_FAILED_MESSAGE =
+  "Microsoft mailbox access could not be authorized right now. Please try again.";
+const SIGN_IN_ALREADY_IN_PROGRESS_MESSAGE =
+  "Microsoft sign-in is already in progress. Please finish the open sign-in popup and try again if needed.";
+const SIGN_IN_REQUIRED_MESSAGE =
+  "Sign in to Microsoft to load your live inbox.";
 
-async function getBrowserMsalInstance(): Promise<PublicClientApplication> {
-  if (msalInstance) {
-    return msalInstance;
-  }
+let msalClientPromise: Promise<PublicClientApplication | null> | null = null;
+let accessTokenPromise: Promise<string> | null = null;
+let loginPopupPromise: Promise<AuthenticationResult> | null = null;
 
-  if (!msalInitializePromise) {
-    msalInitializePromise = (async () => {
-      const config = getMsalRuntimeConfig();
-      const instance = new PublicClientApplication(
-        createMsalConfiguration(config),
-      );
-
-      await instance.initialize();
-      msalInstance = instance;
-
-      console.info("[getAccessToken] Browser MSAL initialized");
-      return instance;
-    })();
-  }
-
-  return msalInitializePromise;
+function isNoTokenRequestCacheError(error: unknown): boolean {
+  return (
+    error instanceof BrowserAuthError &&
+    error.errorCode === BrowserAuthErrorCodes.noTokenRequestCacheError
+  );
 }
 
-async function getBrowserAccessToken(options?: {
-  interactive?: boolean;
-}): Promise<string> {
-  console.log("[getAccessToken] using browser auth");
+function isUserCancelledAuthError(error: unknown): boolean {
+  return (
+    error instanceof BrowserAuthError &&
+    (error.errorCode === BrowserAuthErrorCodes.userCancelled ||
+      error.errorCode === BrowserAuthErrorCodes.popupWindowError)
+  );
+}
 
-  const instance = await getBrowserMsalInstance();
-  const accounts = instance.getAllAccounts();
+function isInteractionInProgressError(error: unknown): boolean {
+  return (
+    error instanceof BrowserAuthError &&
+    error.errorCode === BrowserAuthErrorCodes.interactionInProgress
+  );
+}
 
-  console.log("[getAccessToken] browser account count:", accounts.length);
+async function handleRedirectResponse(
+  client: PublicClientApplication,
+): Promise<void> {
+  try {
+    const redirectResponse = await client.handleRedirectPromise();
 
-  const account = accounts[0];
+    if (redirectResponse?.account) {
+      client.setActiveAccount(redirectResponse.account);
+    }
+  } catch (error) {
+    if (!isNoTokenRequestCacheError(error)) {
+      throw error;
+    }
+  }
+}
+
+async function getMsalClient(): Promise<PublicClientApplication | null> {
+  if (msalClientPromise) {
+    return msalClientPromise;
+  }
+
+  msalClientPromise = (async () => {
+    const runtimeConfig = getMsalRuntimeConfig();
+
+    if (describeMissingMsalConfig(runtimeConfig).length > 0) {
+      return null;
+    }
+
+    const client = new PublicClientApplication(
+      createMsalConfiguration(runtimeConfig),
+    );
+
+    await client.initialize();
+    await handleRedirectResponse(client);
+
+    const existingAccount =
+      client.getActiveAccount() ?? client.getAllAccounts()[0] ?? null;
+
+    if (existingAccount) {
+      client.setActiveAccount(existingAccount);
+    }
+
+    return client;
+  })();
+
+  return msalClientPromise;
+}
+
+function getActiveAccount(client: PublicClientApplication) {
+  const account = client.getActiveAccount() ?? client.getAllAccounts()[0] ?? null;
 
   if (account) {
-    try {
-      console.log("[getAccessToken] trying browser silent token");
-      const silentResult = await instance.acquireTokenSilent(
-        createMailReadSilentRequest(account),
-      );
-      console.log("[getAccessToken] browser silent token success");
-      return silentResult.accessToken;
-    } catch (error) {
-      console.warn("[getAccessToken] browser silent token failed:", error);
-    }
+    client.setActiveAccount(account);
   }
 
-  if (options?.interactive === true) {
-    console.log("[getAccessToken] starting browser popup login");
-    const loginResult = await instance.loginPopup(
-      createMailReadPopupRequest(),
-    );
-
-    const loginAccount = loginResult.account;
-    if (!loginAccount) {
-      throw new Error("Microsoft login completed, but no account was returned.");
-    }
-
-    const tokenResult = await instance.acquireTokenSilent(
-      createMailReadSilentRequest(loginAccount),
-    );
-
-    console.log("[getAccessToken] browser popup login success");
-    return tokenResult.accessToken;
-  }
-
-  throw new Error("User not authenticated and interactive login not allowed.");
+  return account;
 }
 
-async function runSingleDesktopSignIn(): Promise<void> {
-  if (!desktopSignInPromise) {
-    desktopSignInPromise = (async () => {
-      console.log("[getAccessToken] starting desktop sign-in");
-      await window.actionDeskDesktop!.signIn!();
-    })().finally(() => {
-      desktopSignInPromise = null;
-    });
+async function ensureSignedIn(client: PublicClientApplication) {
+  const existingAccount = getActiveAccount(client);
+
+  if (existingAccount) {
+    return existingAccount;
   }
 
-  return desktopSignInPromise;
+  if (!loginPopupPromise) {
+    loginPopupPromise = client.loginPopup(createMailReadPopupRequest());
+  }
+
+  try {
+    const loginResponse = await loginPopupPromise;
+    const account = loginResponse.account ?? getActiveAccount(client);
+
+    if (!account) {
+      throw new Error(SIGN_IN_FAILED_MESSAGE);
+    }
+
+    client.setActiveAccount(account);
+    return account;
+  } catch (error) {
+    if (isUserCancelledAuthError(error)) {
+      throw new Error(SIGN_IN_FAILED_MESSAGE);
+    }
+
+    if (isInteractionInProgressError(error)) {
+      throw new Error(SIGN_IN_ALREADY_IN_PROGRESS_MESSAGE);
+    }
+
+    throw error;
+  } finally {
+    loginPopupPromise = null;
+  }
+}
+
+async function getAccessTokenInternal(options?: {
+  interactive?: boolean;
+}): Promise<string> {
+  const runtimeConfig = getMsalRuntimeConfig();
+  const missingConfig = describeMissingMsalConfig(runtimeConfig);
+
+  if (missingConfig.length > 0) {
+    throw new Error(MISSING_AUTH_CONFIGURATION_MESSAGE);
+  }
+
+  const client = await getMsalClient();
+
+  if (!client) {
+    throw new Error("Microsoft auth client could not be initialized.");
+  }
+
+  const existingAccount = getActiveAccount(client);
+
+  if (!existingAccount && options?.interactive !== true) {
+    throw new Error(SIGN_IN_REQUIRED_MESSAGE);
+  }
+
+  const account = existingAccount ?? (await ensureSignedIn(client));
+  client.setActiveAccount(account);
+
+  try {
+    const tokenResponse = await client.acquireTokenSilent(
+      createMailReadSilentRequest(account),
+    );
+
+    client.setActiveAccount(tokenResponse.account ?? account);
+    return tokenResponse.accessToken;
+  } catch (error) {
+    if (!(error instanceof InteractionRequiredAuthError)) {
+      if (isUserCancelledAuthError(error)) {
+        throw new Error(SIGN_IN_FAILED_MESSAGE);
+      }
+
+      if (isInteractionInProgressError(error)) {
+        throw new Error(SIGN_IN_ALREADY_IN_PROGRESS_MESSAGE);
+      }
+
+      throw new Error(TOKEN_ACQUISITION_FAILED_MESSAGE);
+    }
+
+    const popupAccount = await ensureSignedIn(client);
+
+    try {
+      const tokenResponse = await client.acquireTokenSilent(
+        createMailReadSilentRequest(popupAccount),
+      );
+
+      client.setActiveAccount(tokenResponse.account ?? popupAccount);
+      return tokenResponse.accessToken;
+    } catch (popupTokenError) {
+      if (isInteractionInProgressError(popupTokenError)) {
+        throw new Error(SIGN_IN_ALREADY_IN_PROGRESS_MESSAGE);
+      }
+
+      throw new Error(TOKEN_ACQUISITION_FAILED_MESSAGE);
+    }
+  }
 }
 
 export async function getAccessToken(options?: {
   interactive?: boolean;
 }): Promise<string> {
-  const isDesktop = Boolean(window.actionDeskDesktop?.isElectron);
-
-  console.log(
-    "[getAccessToken] called. isDesktop:",
-    isDesktop,
-    "interactive:",
-    options?.interactive,
-  );
-
-  if (isDesktop) {
-    console.log("[getAccessToken] using Electron desktop auth flow");
-
-    try {
-      const token = await window.actionDeskDesktop!.getAccessToken!();
-      console.log("[getAccessToken] desktop silent token success");
-      return token;
-    } catch (error) {
-      console.warn("[getAccessToken] desktop silent token failed:", error);
-
-      if (options?.interactive === true) {
-        await runSingleDesktopSignIn();
-        const token = await window.actionDeskDesktop!.getAccessToken!();
-        console.log("[getAccessToken] desktop sign-in success");
-        return token;
-      }
-
-      throw error;
-    }
+  if (accessTokenPromise) {
+    return accessTokenPromise;
   }
 
-  return getBrowserAccessToken(options);
+  accessTokenPromise = getAccessTokenInternal(options);
+
+  try {
+    return await accessTokenPromise;
+  } finally {
+    accessTokenPromise = null;
+  }
 }
