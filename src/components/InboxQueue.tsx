@@ -759,18 +759,25 @@ export function InboxQueue({
                 ...rowSurfaceStyle,
               }}
             >
-              <button
-                type="button"
-                onClick={() => onSelectEmail(item.email.id)}
-                style={{
-                  width: "100%",
-                  border: "none",
-                  background: "transparent",
-                  padding: "18px 20px",
-                  textAlign: "left",
-                  cursor: "pointer",
-                }}
-              >
+              <div
+  role="button"
+  tabIndex={0}
+  onClick={() => onSelectEmail(item.email.id)}
+  onKeyDown={(event) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      onSelectEmail(item.email.id);
+    }
+  }}
+  style={{
+    width: "100%",
+    border: "none",
+    background: "transparent",
+    padding: "18px 20px",
+    textAlign: "left",
+    cursor: "pointer",
+  }}
+>
                 <div
                   style={{
                     display: "flex",
@@ -1021,7 +1028,7 @@ export function InboxQueue({
                     <span style={sourceBadgeStyle}>From Outlook</span>
                   )}
                 </div>
-              </button>
+              </div>
 
               {isFailed && (
                 <div style={{ padding: "0 20px 16px" }}>

@@ -1,0 +1,29 @@
+{
+  "compilerOptions": {
+    "outDir": "dist-electron",
+    "module": "CommonJS",
+    "target": "ES2020",
+    "esModuleInterop": true,
+    "moduleResolution": "node",
+    "strict": true,
+    "skipLibCheck": true
+  },
+  "include": [
+    "src/repositories/**/*",
+    "src/services/**/*",
+    "src/mappers/**/*",
+    "src/persistence/**/*",
+    "src/utils/**/*",
+    "src/types/**/*"
+  ],
+  "exclude": [
+    "**/*.test.ts",
+    "src/components",
+    "src/App.tsx",
+    "src/main.tsx",
+    "src/taskpane.tsx",
+    "src/TaskPaneApp.tsx",
+    "src/auth",
+    "src/office"
+  ]
+}

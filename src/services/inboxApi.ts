@@ -63,9 +63,15 @@ function normalizeInboxApiResponse(payload: unknown): EmailSourceListResult {
 export async function fetchInboxPage(
   options?: FetchInboxPageOptions,
 ): Promise<EmailSourceListResult> {
+  console.log("[inboxApi] fetchInboxPage called with interactiveAuth:", options?.interactiveAuth);
+  console.log("[inboxApi] requesting access token...");
+
   const accessToken = await getAccessToken({
     interactive: options?.interactiveAuth === true,
   });
+
+  console.log("[inboxApi] access token acquired");
+
   const url = new URL("/api/inbox/messages", window.location.origin);
 
   if (options?.cursor) {

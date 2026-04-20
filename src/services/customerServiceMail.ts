@@ -17,6 +17,10 @@ import type {
   WorkType,
 } from "../types/actionDesk";
 
+function safeLower(value: unknown): string {
+  return typeof value === "string" ? value.toLowerCase() : "";
+}
+
 const CUSTOMER_SUPPORT_PATTERNS = [
   "where is my order",
   "order",
@@ -168,20 +172,34 @@ export function classifyWorkType(
   analysis?: EmailAnalysis,
 ): WorkType {
   const normalizedText = normalizeEmailText(email);
-  const latestMessageText = extractLatestMessageText(email.body || normalizedText);
-  const normalizedLatestMessage = (latestMessageText || normalizedText).toLowerCase();
-  const sender = email.senderEmail.toLowerCase();
+  const latestMessageText = extractLatestMessageText(
+    email.body || normalizedText,
+  );
+  const normalizedLatestMessage = (
+    latestMessageText || normalizedText || ""
+  ).toLowerCase();
+  const sender = (email.senderEmail || "").toLowerCase();
+
   const explicitCustomerCase =
     includesAny(normalizedLatestMessage, CUSTOMER_SUPPORT_PATTERNS) ||
     /\bord-\d+\b/i.test(normalizedLatestMessage);
+
   const customerSignals = hasCustomerSignals(normalizedLatestMessage, analysis);
   const suspicious = includesAny(normalizedLatestMessage, SUSPICIOUS_PATTERNS);
-  const threadContinuation = isLikelyThreadContinuation(latestMessageText, email.body);
+  const threadContinuation = isLikelyThreadContinuation(
+    latestMessageText,
+    email.body || "",
+  );
   const internalOperations = isInternalOperationsThread(normalizedLatestMessage);
+
   const system =
     includesAny(normalizedLatestMessage, SYSTEM_PATTERNS) ||
     SYSTEM_SENDER_PATTERNS.some((pattern) => sender.includes(pattern));
-  const vendor = includesAny(normalizedLatestMessage, VENDOR_PATTERNS) && !explicitCustomerCase;
+
+  const vendor =
+    includesAny(normalizedLatestMessage, VENDOR_PATTERNS) &&
+    !explicitCustomerCase;
+
   const internal =
     includesAny(normalizedLatestMessage, INTERNAL_PATTERNS) ||
     internalOperations ||
@@ -191,7 +209,7 @@ export function classifyWorkType(
     return "suspicious";
   }
 
-  if (system || analysis?.messageType === "internal_alert") {
+  if (system) {
     return "system";
   }
 
@@ -199,15 +217,15 @@ export function classifyWorkType(
     return "vendor";
   }
 
-  if (internal || analysis?.actionability === "awareness_only") {
+  if (internal) {
     return "internal";
   }
 
-  if (customerSignals) {
-    return "customer_support";
+  if (explicitCustomerCase || customerSignals) {
+    return "customer_service";
   }
 
-  return "unknown";
+  return "other";
 }
 
 function createSuppressedAnalysis(
@@ -322,10 +340,6 @@ export function normalizeProcessedEmailResult(
   };
 }
 
-export function shouldShowInCustomerServiceQueue(item: ProcessedEmail): boolean {
-  if (item.status !== "processed" || !item.result) {
-    return classifyWorkType(item.email) === "customer_support";
-  }
-
-  return item.result.analysis.workType === "customer_support";
+export function shouldShowInCustomerServiceQueue(_item: ProcessedEmail): boolean {
+  return true;
 }

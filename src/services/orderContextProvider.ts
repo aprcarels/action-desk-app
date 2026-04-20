@@ -1,48 +1,44 @@
-import type { OrderContext } from "../types/actionDesk";
 import { mockOrderContextProvider } from "./orderContextProviders/mockOrderContextProvider";
 import { createRealOrderContextProvider } from "./orderContextProviders/realOrderContextProvider";
-import { isPilotModeEnabled } from "./pilotMode";
 
-export interface OrderContextProvider {
-  getOrderContext(orderNumber: string): Promise<OrderContext | null>;
-}
-
-const disconnectedOrderContextProvider: OrderContextProvider = {
-  async getOrderContext(): Promise<OrderContext | null> {
-    return null;
-  },
+export type OrderContextProvider = {
+  getOrderContext(orderNumber: string): Promise<{
+    orderNumber: string;
+    status: string;
+    shipmentStatus: string;
+    lastUpdated: string;
+  } | null>;
 };
 
-type OrderContextSource = "mock" | "real";
+type OrderContextSource = "real" | "mock";
 
-type OrderContextRuntimeConfig = {
-  source: OrderContextSource;
-  apiBaseUrl?: string;
-};
+function getEnvValue(name: string): string | undefined {
+  if (typeof process !== "undefined" && process.env && typeof process.env[name] === "string") {
+    return process.env[name];
+  }
 
-export function getOrderContextRuntimeConfig(): OrderContextRuntimeConfig {
-  return {
-    source: import.meta.env.VITE_ORDER_CONTEXT_SOURCE === "real" ? "real" : "mock",
-    apiBaseUrl: import.meta.env.VITE_ORDER_CONTEXT_API_BASE_URL?.trim() || undefined,
-  };
+  return undefined;
 }
 
-export function createOrderContextProvider(
-  config: OrderContextRuntimeConfig,
-): OrderContextProvider {
-  if (config.source === "real" && config.apiBaseUrl) {
-    return createRealOrderContextProvider({
-      apiBaseUrl: config.apiBaseUrl,
-    });
-  }
+function resolveOrderContextSource(): OrderContextSource {
+  const envValue = getEnvValue("VITE_ORDER_CONTEXT_SOURCE");
+  return envValue === "real" ? "real" : "mock";
+}
 
-  if (isPilotModeEnabled()) {
-    return disconnectedOrderContextProvider;
-  }
-
-  return mockOrderContextProvider;
+function resolveOrderContextApiBaseUrl(): string | undefined {
+  const envValue = getEnvValue("VITE_ORDER_CONTEXT_API_BASE_URL")?.trim();
+  return envValue || undefined;
 }
 
 export function getOrderContextProvider(): OrderContextProvider {
-  return createOrderContextProvider(getOrderContextRuntimeConfig());
+  const source = resolveOrderContextSource();
+  const apiBaseUrl = resolveOrderContextApiBaseUrl();
+
+  if (source === "real") {
+    return createRealOrderContextProvider({
+      apiBaseUrl,
+    });
+  }
+
+  return mockOrderContextProvider;
 }

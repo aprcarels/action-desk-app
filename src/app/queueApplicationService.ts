@@ -124,7 +124,7 @@ export class QueueApplicationService {
           }
 
           await new Promise<void>((resolve) => {
-            window.setTimeout(() => resolve(), 0);
+            setTimeout(() => resolve(), 0);
           });
         }
       })();

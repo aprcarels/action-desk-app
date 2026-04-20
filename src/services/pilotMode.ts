@@ -1,18 +1,23 @@
-import type { RawInboxEmail } from "../types/inboxSource";
+import { getEnv } from "../utils/env";
 
-export const PILOT_ORDER_DATA_MESSAGE = "Order data not connected yet. Verify in WMS.";
+export const PILOT_ORDER_DATA_MESSAGE =
+  "Order context is currently using pilot/demo-safe data unless otherwise noted.";
 
 export function isPilotModeEnabled(): boolean {
-  return import.meta.env.VITE_PILOT_MODE === "true";
+  return getEnv("VITE_PILOT_MODE") === "true";
 }
 
-export function filterInboxEmailsForPilotMode(
-  emails: RawInboxEmail[],
-  pilotMode: boolean,
-): RawInboxEmail[] {
+export function filterInboxEmailsForPilotMode<T>(
+  items: T[],
+  pilotMode = isPilotModeEnabled(),
+): T[] {
   if (!pilotMode) {
-    return emails;
+    return items;
   }
 
-  return emails.filter((email) => email.provider !== "dev_json");
+  return items.filter((item) => {
+    const source = (item as { source?: string } | null)?.source;
+
+    return source === "outlook_import" || source === "outlook_graph";
+  });
 }

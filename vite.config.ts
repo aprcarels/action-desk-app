@@ -146,12 +146,12 @@ export default defineConfig({
     https: httpsConfig,
   },
   build: {
-    rollupOptions: {
-      input: {
-        index: resolve(__dirname, "index.html"),
-        taskpane: resolve(__dirname, "taskpane.html"),
-        popupCallback: resolve(__dirname, "auth", "popup-callback.html"),
-      },
+  rollupOptions: {
+    input: {
+      index: resolve(__dirname, "index.html"),
+      taskpane: resolve(__dirname, "taskpane.html"),
+      redirect: resolve(__dirname, "redirect.html"),
     },
   },
+},
 });

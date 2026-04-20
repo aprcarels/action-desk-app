@@ -1,0 +1,89 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.RISK_LABELS = exports.INTENT_LABELS = void 0;
+exports.normalizeIntent = normalizeIntent;
+exports.normalizeRisks = normalizeRisks;
+exports.getIntentLabel = getIntentLabel;
+exports.getRiskLabel = getRiskLabel;
+exports.INTENT_LABELS = {
+    where_is_my_order: "Where Is My Order",
+    pod_request: "POD Request",
+    cancellation_request: "Cancellation Request",
+    short_shipment: "Short Shipment",
+    damaged_shipment: "Damaged Shipment",
+    address_change: "Address Change",
+    billing_question: "Billing Question",
+    operational_confirmation: "Operational Confirmation",
+    general_support: "General Support",
+};
+exports.RISK_LABELS = {
+    delay_or_no_tracking_update: "Delay or no recent tracking update.",
+    customer_frustration: "Customer sounds frustrated and may need a prompt, clear response.",
+    delivered_not_received: "Tracking may show delivered but the customer reports it was not received.",
+    pod_needed: "Customer needs proof of delivery or delivery confirmation.",
+    cancellation_review_needed: "Order may need cancellation review before it ships.",
+    missing_items_reported: "Customer reports missing items or a short shipment.",
+    damage_reported: "Shipment damage may require replacement or claim review.",
+    address_correction_needed: "Shipping address may need correction before delivery progresses.",
+    duplicate_shipment_possible: "A duplicate shipment may have been released.",
+    billing_discrepancy: "Billing or invoice details may need review.",
+};
+const INTENT_ALIASES = {
+    where_is_my_order: "where_is_my_order",
+    order_status_request: "where_is_my_order",
+    missing_order_number: "where_is_my_order",
+    proof_of_delivery_request: "pod_request",
+    pod_request: "pod_request",
+    cancellation_request: "cancellation_request",
+    short_shipment: "short_shipment",
+    damaged_shipment: "damaged_shipment",
+    address_change: "address_change",
+    address_change_request: "address_change",
+    billing_question: "billing_question",
+    operational_confirmation: "operational_confirmation",
+    logistics_confirmation: "operational_confirmation",
+    general_support: "general_support",
+    general_support_request: "general_support",
+    duplicate_shipment_concern: "general_support",
+};
+const RISK_ALIASES = {
+    delay_or_no_tracking_update: "delay_or_no_tracking_update",
+    customer_frustration: "customer_frustration",
+    delivered_not_received: "delivered_not_received",
+    pod_needed: "pod_needed",
+    cancellation_review_needed: "cancellation_review_needed",
+    missing_items_reported: "missing_items_reported",
+    damage_reported: "damage_reported",
+    address_correction_needed: "address_correction_needed",
+    duplicate_shipment_possible: "duplicate_shipment_possible",
+    billing_discrepancy: "billing_discrepancy",
+    customer_reports_a_delay_or_no_recent_shipment_updates: "delay_or_no_tracking_update",
+    customer_is_frustrated_and_may_need_a_fast_clear_response: "customer_frustration",
+    shipment_may_be_missing_after_marked_delivery: "delivered_not_received",
+    customer_needs_delivery_documentation_for_confirmation_or_claim_handling: "pod_needed",
+    order_may_need_cancellation_review_before_additional_processing_or_shipment: "cancellation_review_needed",
+    customer_reports_a_short_shipment_or_missing_items: "missing_items_reported",
+    shipment_may_require_damage_review_replacement_or_claim_handling: "damage_reported",
+    shipping_address_may_need_to_be_corrected_before_delivery_progresses: "address_correction_needed",
+    customer_may_have_received_or_expects_a_duplicate_shipment: "duplicate_shipment_possible",
+    customer_has_a_billing_or_invoice_discrepancy_that_needs_review: "billing_discrepancy",
+};
+function toTaxonomyKey(value) {
+    return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+}
+function normalizeIntent(value) {
+    return INTENT_ALIASES[toTaxonomyKey(value)] ?? "general_support";
+}
+function normalizeRisks(values) {
+    const normalized = values.flatMap((value) => {
+        const match = RISK_ALIASES[toTaxonomyKey(value)];
+        return match ? [match] : [];
+    });
+    return Array.from(new Set(normalized));
+}
+function getIntentLabel(intent) {
+    return exports.INTENT_LABELS[intent];
+}
+function getRiskLabel(risk) {
+    return exports.RISK_LABELS[risk];
+}

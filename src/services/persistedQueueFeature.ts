@@ -1,3 +1,5 @@
+import { getEnv } from "../utils/env";
+
 export function isPersistedQueueEnabled(): boolean {
-  return import.meta.env.VITE_USE_PERSISTED_QUEUE === "true";
+  return getEnv("VITE_USE_PERSISTED_QUEUE") === "true";
 }

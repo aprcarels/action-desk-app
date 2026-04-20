@@ -30,12 +30,7 @@ export type RepositoryFactoryOptions = {
 };
 
 function resolveBackend(explicitBackend?: RepositoryBackend): RepositoryBackend {
-  if (explicitBackend) {
-    return explicitBackend;
-  }
-
-  const runtimeBackend = import.meta.env.VITE_QUEUE_REPOSITORY_BACKEND;
-  return runtimeBackend === "sqlite" ? "sqlite" : "memory";
+  return explicitBackend ?? "memory";
 }
 
 export function createRepositoryBundle(options?: RepositoryFactoryOptions): RepositoryBundle {

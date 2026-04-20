@@ -1,5 +1,8 @@
 import { runActionDesk } from "./runActionDesk";
-import { normalizeProcessedEmailResult, shouldShowInCustomerServiceQueue } from "../services/customerServiceMail";
+import {
+  normalizeProcessedEmailResult,
+  shouldShowInCustomerServiceQueue,
+} from "../services/customerServiceMail";
 import { buildAnalysisInput } from "../services/analysisInput";
 import type {
   ActionDeskResult,
@@ -25,21 +28,38 @@ export type ProcessEmailsProgressivelyResult = {
   failedCount: number;
 };
 
-export function buildPreviewText(result: ActionDeskResult, email: EmailItem): string {
+function safeText(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+function safeLower(value: unknown): string {
+  return safeText(value).toLowerCase();
+}
+
+export function buildPreviewText(
+  result: ActionDeskResult,
+  email: EmailItem,
+): string {
   const summary = result.analysis.summary.trim();
 
   if (summary.length > 0) {
     return summary;
   }
 
-  return email.previewText?.trim() || email.body.replace(/\s+/g, " ").trim();
+  return (
+    email.previewText?.trim() ||
+    safeText((email as any).body).replace(/\s+/g, " ").trim()
+  );
 }
 
 function getAnalysisInput(email: EmailItem): string {
   return buildAnalysisInput(email);
 }
 
-export function createProcessedEmail(email: EmailItem, result: ActionDeskResult): ProcessedEmail {
+export function createProcessedEmail(
+  email: EmailItem,
+  result: ActionDeskResult,
+): ProcessedEmail {
   const normalizedResult = normalizeProcessedEmailResult(email, result);
 
   return {
@@ -60,7 +80,9 @@ export function createFailedProcessedEmail(
     status: "failed",
     processingError,
     issueCount: 0,
-    previewText: email.previewText?.trim() || email.body.replace(/\s+/g, " ").trim(),
+    previewText:
+      email.previewText?.trim() ||
+      safeText((email as any).body).replace(/\s+/g, " ").trim(),
   };
 }
 
@@ -69,7 +91,9 @@ export function createPendingProcessedEmail(email: EmailItem): ProcessedEmail {
     email,
     status: "pending",
     issueCount: 0,
-    previewText: email.previewText?.trim() || email.body.replace(/\s+/g, " ").trim(),
+    previewText:
+      email.previewText?.trim() ||
+      safeText((email as any).body).replace(/\s+/g, " ").trim(),
   };
 }
 
@@ -97,7 +121,8 @@ export function sortProcessedEmails(items: ProcessedEmail[]): ProcessedEmail[] {
     }
 
     if (left.status === "processed" && right.status === "processed") {
-      const priorityDifference = (right.result?.priorityScore ?? 0) - (left.result?.priorityScore ?? 0);
+      const priorityDifference =
+        (right.result?.priorityScore ?? 0) - (left.result?.priorityScore ?? 0);
 
       if (priorityDifference !== 0) {
         return priorityDifference;
@@ -119,19 +144,30 @@ export function filterProcessedEmails(
 
   return items.filter((item) => {
     const matchesQueueView =
-      filters.queueView !== "customer_service" || shouldShowInCustomerServiceQueue(item);
+      filters.queueView !== "customer_service" ||
+      shouldShowInCustomerServiceQueue(item);
+
     const matchesUrgency =
       filters.urgency === "all" ||
-      (item.status === "processed" && item.result?.analysis.urgency === filters.urgency);
+      (item.status === "processed" &&
+        item.result?.analysis.urgency === filters.urgency);
+
     const matchesIntent =
       filters.intent === "all" ||
-      (item.status === "processed" && item.result?.analysis.intent === filters.intent);
+      (item.status === "processed" &&
+        item.result?.analysis.intent === filters.intent);
+
     const matchesSearch =
       query.length === 0 ||
-      item.email.senderName.toLowerCase().includes(query) ||
-      item.email.subject.toLowerCase().includes(query);
+      safeLower(item.email.senderName).includes(query) ||
+      safeLower(item.email.subject).includes(query);
 
-    return matchesQueueView && matchesUrgency && matchesIntent && matchesSearch;
+    return (
+      matchesQueueView &&
+      matchesUrgency &&
+      matchesIntent &&
+      matchesSearch
+    );
   });
 }
 
@@ -139,7 +175,9 @@ export function getIntentOptions(items: ProcessedEmail[]): IntentCode[] {
   return Array.from(
     new Set(
       items.flatMap((item) =>
-        item.status === "processed" && item.result ? [item.result.analysis.intent] : [],
+        item.status === "processed" && item.result
+          ? [item.result.analysis.intent]
+          : [],
       ),
     ),
   ).sort((left, right) => left.localeCompare(right));
@@ -152,7 +190,9 @@ export function refreshProcessedEmail(
 ): ProcessedEmail[] {
   return sortProcessedEmails(
     items.map((item) =>
-      item.email.id === emailId ? createProcessedEmail(item.email, nextResult) : item,
+      item.email.id === emailId
+        ? createProcessedEmail(item.email, nextResult)
+        : item,
     ),
   );
 }
@@ -185,11 +225,12 @@ export function replaceProcessedEmail(
   );
 }
 
-export async function processEmails(emails: EmailItem[]): Promise<ProcessedEmail[]> {
+export async function processEmails(
+  emails: EmailItem[],
+): Promise<ProcessedEmail[]> {
   const settledItems = await Promise.allSettled(
     emails.map(async (email) => {
       const result = await runActionDesk(getAnalysisInput(email));
-
       return createProcessedEmail(email, result);
     }),
   );
@@ -224,8 +265,20 @@ export async function processEmailsProgressively(
         processedCount += 1;
         processedItems.push(processedItem);
         options?.onItemProcessed?.(processedItem);
-      } catch {
-        const failedItem = createFailedProcessedEmail(email, getProcessingErrorMessage());
+      } catch (error) {
+        console.error("EMAIL PROCESSING FAILED", {
+          emailId: email.id,
+          subject: email.subject,
+          senderName: email.senderName,
+          senderEmail: (email as any).senderEmail,
+          receivedAt: email.receivedAt,
+          error,
+        });
+
+        const failedItem = createFailedProcessedEmail(
+          email,
+          getProcessingErrorMessage(),
+        );
         failedCount += 1;
         processedItems.push(failedItem);
         options?.onItemProcessed?.(failedItem);

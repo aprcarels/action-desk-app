@@ -4,6 +4,7 @@ import type {
   PopupRequest,
   SilentRequest,
 } from "@azure/msal-browser";
+import { getEnv } from "../utils/env";
 
 export const graphMailReadScopes = ["Mail.Read"];
 const MSAL_CALLBACK_PATH = "/auth/popup-callback.html";
@@ -17,10 +18,10 @@ type MsalRuntimeConfig = {
 
 export function getMsalRuntimeConfig(): MsalRuntimeConfig {
   return {
-    clientId: import.meta.env.VITE_AZURE_CLIENT_ID,
-    tenantId: import.meta.env.VITE_AZURE_TENANT_ID,
-    authority: import.meta.env.VITE_AZURE_AUTHORITY,
-    redirectUri: import.meta.env.VITE_AZURE_REDIRECT_URI,
+    clientId: getEnv("VITE_AZURE_CLIENT_ID"),
+    tenantId: getEnv("VITE_AZURE_TENANT_ID"),
+    authority: getEnv("VITE_AZURE_AUTHORITY"),
+    redirectUri: getEnv("VITE_AZURE_REDIRECT_URI"),
   };
 }
 
@@ -40,7 +41,12 @@ function normalizeLocalhostHttps(url: string): string {
 }
 
 function resolveRedirectOrigin(config: MsalRuntimeConfig): string {
-  return normalizeLocalhostHttps(config.redirectUri ?? window.location.origin);
+  const fallbackOrigin =
+    typeof window !== "undefined" && window.location?.origin
+      ? window.location.origin
+      : "https://localhost:5173";
+
+  return normalizeLocalhostHttps(config.redirectUri ?? fallbackOrigin);
 }
 
 function resolveAuthCallbackRedirectUri(): string {
@@ -97,7 +103,7 @@ export function createMsalConfiguration(config: MsalRuntimeConfig): Configuratio
 export function createMailReadPopupRequest(): PopupRequest {
   const redirectUri = resolveAuthCallbackRedirectUri();
 
-  if (import.meta.env.DEV) {
+  if (getEnv("DEV") === "true") {
     console.info("[Action Desk] MSAL popup redirect URI:", redirectUri);
   }
 
