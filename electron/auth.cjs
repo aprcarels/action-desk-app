@@ -24,6 +24,7 @@ const AUTH_TIMEOUT_MS = 120000;
 let msalApp = null;
 let cryptoProvider = null;
 const sessionContexts = new Map();
+let lastActiveSessionId = null;
 
 function createAuthError(message, code) {
   const error = new Error(message);
@@ -33,6 +34,14 @@ function createAuthError(message, code) {
 
 function createSessionId() {
   return `session-${crypto.randomUUID()}`;
+}
+
+function rememberActiveSession(sessionId) {
+  const normalizedSessionId = String(sessionId || "");
+
+  if (normalizedSessionId && sessionContexts.has(normalizedSessionId)) {
+    lastActiveSessionId = normalizedSessionId;
+  }
 }
 
 function getRequiredEnv(name) {
@@ -175,6 +184,7 @@ async function signInWithMicrosoft(logger) {
         : Date.now() + 3600 * 1000,
       identity: buildIdentityFromResult(result),
     });
+    rememberActiveSession(sessionId);
 
     return {
       sessionId,
@@ -220,6 +230,7 @@ async function getAccessTokenForSession(sessionId, options = {}, logger) {
   }
 
   if (context.accessToken && context.expiresAt > Date.now() + 60_000) {
+    rememberActiveSession(sessionId);
     return context.accessToken;
   }
 
@@ -241,6 +252,7 @@ async function getAccessTokenForSession(sessionId, options = {}, logger) {
       : Date.now() + 3600 * 1000;
     context.identity = buildIdentityFromResult(result);
 
+    rememberActiveSession(sessionId);
     return context.accessToken;
   } catch (error) {
     if (!(error instanceof InteractionRequiredAuthError) || options.interactive !== true) {
@@ -254,8 +266,33 @@ async function getAccessTokenForSession(sessionId, options = {}, logger) {
       sessionId: String(sessionId || ""),
     });
 
-    return refreshInteractiveAccessToken(context, logger);
+    const accessToken = await refreshInteractiveAccessToken(context, logger);
+    rememberActiveSession(sessionId);
+    return accessToken;
   }
+}
+
+function getAvailableSessionId() {
+  if (lastActiveSessionId && sessionContexts.has(lastActiveSessionId)) {
+    return lastActiveSessionId;
+  }
+
+  const firstSessionId = sessionContexts.keys().next().value;
+
+  return firstSessionId ? String(firstSessionId) : "";
+}
+
+async function getAccessTokenForAvailableSession(options = {}, logger) {
+  const sessionId = getAvailableSessionId();
+
+  if (!sessionId) {
+    throw createAuthError(
+      "Your Microsoft session expired. Please sign in again.",
+      "microsoft_session_missing",
+    );
+  }
+
+  return getAccessTokenForSession(sessionId, options, logger);
 }
 
 function getSessionIdentity(sessionId) {
@@ -267,10 +304,16 @@ function hasSessionContext(sessionId) {
 }
 
 function signOutSession(sessionId) {
-  sessionContexts.delete(String(sessionId || ""));
+  const normalizedSessionId = String(sessionId || "");
+  sessionContexts.delete(normalizedSessionId);
+
+  if (lastActiveSessionId === normalizedSessionId) {
+    lastActiveSessionId = null;
+  }
 }
 
 module.exports = {
+  getAccessTokenForAvailableSession,
   getAccessTokenForSession,
   getSessionIdentity,
   hasSessionContext,

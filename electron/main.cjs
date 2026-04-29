@@ -21,6 +21,7 @@ const {
 } = require("../dist-electron/mappers/mapRawInboxEmailToMailboxMessage");
 
 const {
+  getAccessTokenForAvailableSession,
   getAccessTokenForSession,
   hasSessionContext,
   signInWithMicrosoft,
@@ -172,6 +173,7 @@ app.whenReady().then(async () => {
       distDir: path.join(__dirname, "../dist"),
       databasePath: path.join(app.getPath("userData"), "action-desk-shared.sqlite"),
       authProvider: {
+        getAccessTokenForAvailableSession,
         getAccessTokenForSession,
         hasSessionContext,
         signOutSession,
