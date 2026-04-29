@@ -67,6 +67,224 @@ export type CaseIdentifier = {
   source: CaseIdentifierSource;
 };
 
+export type CustomerAssignmentRole = "primary" | "secondary" | "backup";
+
+export type CustomerCsrAssignment = {
+  repId: string;
+  assignmentRole: CustomerAssignmentRole;
+  locationName?: string;
+  isActive: boolean;
+};
+
+export type SavedCustomer = {
+  id: string;
+  name: string;
+  emails: string[];
+  domains: string[];
+  ownerRepId?: string;
+  ownerRepIds?: string[];
+  assignedCSRs?: CustomerCsrAssignment[];
+  locationId?: string;
+};
+
+export type SavedCustomerDraft = {
+  id?: string;
+  name: string;
+  emails: string[];
+  domains: string[];
+  ownerRepId?: string;
+  ownerRepIds?: string[];
+  assignedCSRs?: CustomerCsrAssignment[];
+  locationId?: string;
+};
+
+export type CustomerMatch = {
+  customerId: string;
+  customerName: string;
+  matchedOn: "sender_email" | "sender_domain" | "sender_name" | "subject" | "body";
+  matchedValue: string;
+  ownerRepId?: string;
+  ownerRepIds?: string[];
+  assignedCSRs?: CustomerCsrAssignment[];
+};
+
+export type RepRole = "rep" | "supervisor" | "admin";
+
+export type AppCapability =
+  | "view_my_queue"
+  | "view_unassigned"
+  | "view_all_emails"
+  | "manage_customer_ownership"
+  | "manage_sla_settings"
+  | "review_override_history"
+  | "view_diagnostics"
+  | "create_backup"
+  | "manage_test_queue_data"
+  | "manage_users";
+
+export type RepProfile = {
+  id: string;
+  name: string;
+  initials: string;
+  email: string;
+  role: RepRole;
+  locationId?: string;
+  isActive?: boolean;
+};
+
+export type ManagedUserMappingStatus = "mapped" | "pending_first_sign_in";
+
+export type ManagedUser = {
+  id: string;
+  entraObjectId?: string;
+  displayName: string;
+  initials: string;
+  email: string;
+  role: RepRole;
+  locationId?: string;
+  isActive: boolean;
+  hasSignedIn: boolean;
+  mappingStatus: ManagedUserMappingStatus;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ManagedUserDraft = {
+  displayName: string;
+  initials: string;
+  email: string;
+  role: RepRole;
+  locationId?: string;
+  isActive: boolean;
+};
+
+export type AssignmentReason =
+  | "Covering for colleague"
+  | "Unassigned"
+  | "Overflow";
+
+export type AssignmentRecord = {
+  type: "auto" | "manual";
+  assignedRepId: string;
+  assignedRepName: string;
+  assignedAt: string;
+  reason?: AssignmentReason;
+  assignedByRepId?: string;
+};
+
+export type WorkflowStatus =
+  | "new"
+  | "in_progress"
+  | "waiting_on_customer"
+  | "resolved";
+
+export type ThreadPresenceType = "viewing" | "working";
+
+export type ThreadPresenceRecord = {
+  threadId: string;
+  activeUserId: string;
+  activeUserName: string;
+  activeUserRole: RepRole;
+  presenceType: ThreadPresenceType;
+  updatedAt: string;
+};
+
+export type WorkflowStatusFilter =
+  | "open"
+  | "all"
+  | WorkflowStatus;
+
+export type QueueScopeView = "my_queue" | "all_emails" | "unassigned";
+export type QueueDisplayMode = "list" | "grouped_by_rep";
+
+export type SupervisorQuickFilter =
+  | "all"
+  | "unassigned"
+  | "over_sla"
+  | "waiting_on_customer"
+  | "resolved_today";
+
+export type EmailInternalNote = {
+  id: string;
+  authorRepId: string;
+  authorName: string;
+  createdAt: string;
+  body: string;
+};
+
+export type ReplyLogEntry = {
+  id: string;
+  repId: string;
+  repName: string;
+  createdAt: string;
+};
+
+export type SnoozeState = {
+  until: string;
+  snoozedByRepId: string;
+  snoozedByRepName: string;
+  createdAt: string;
+};
+
+export type ThreadWorkflowState = {
+  locationId?: string;
+  status?: WorkflowStatus;
+  resolvedAt?: string;
+  manualAssignment?: AssignmentRecord;
+  assignmentHistory: AssignmentRecord[];
+  notes: EmailInternalNote[];
+  replyLog: ReplyLogEntry[];
+  snooze?: SnoozeState;
+  updatedAt?: string;
+  updatedByRepId?: string;
+  updatedByRepName?: string;
+};
+
+export type WorkflowPreferences = {
+  queueScopeView: QueueScopeView;
+  queueDisplayMode: QueueDisplayMode;
+  statusFilter: WorkflowStatusFilter;
+  showSnoozed: boolean;
+};
+
+export type WorkflowState = {
+  reps: RepProfile[];
+  currentRepId: string;
+  threadStates: Record<string, ThreadWorkflowState>;
+  threadPresence: Record<string, ThreadPresenceRecord[]>;
+  preferences: WorkflowPreferences;
+};
+
+export type SlaState = "on_track" | "at_risk" | "breached" | "met";
+export type SlaTarget = "first_response" | "resolution";
+
+export type SlaSettings = {
+  firstResponseSlaMinutes: number;
+  resolutionSlaMinutes: number;
+  warningThresholdPercent: number;
+  warningMinutesBeforeBreach: number;
+  locationId?: string;
+  updatedAt?: string;
+  updatedByRepId?: string;
+  updatedByRepName?: string;
+};
+
+export type WorkflowThreadSlaStatus = {
+  target: SlaTarget;
+  state: SlaState;
+  elapsedMinutes: number;
+  targetMinutes: number;
+  warningStartsAtMinutes: number;
+  dueAt: string;
+  completedAt?: string;
+};
+
+export type AuthSession = {
+  sessionId: string;
+  currentUser: RepProfile | null;
+  capabilities: AppCapability[];
+};
+
 export type DeadlineState = "none" | "current" | "past_due";
 export type QueueAgeBucket = "new" | "aging" | "stale" | "overdue";
 export type QueueAgeStatus =
@@ -125,6 +343,9 @@ export type PilotQueueItemState = {
 
 export type EmailItem = {
   id: string;
+  conversationId?: string;
+  workflowThreadId?: string;
+  locationId?: string;
   senderName: string;
   senderEmail: string;
   subject: string;
@@ -132,7 +353,8 @@ export type EmailItem = {
   body: string;
   previewText?: string;
   provider?: InboxProvider;
-  source?: "seeded" | "outlook_import" | "outlook_graph";
+  source?: "seeded" | "outlook_import" | "outlook_graph" | "test_data";
+  outlookWebLink?: string;
 };
 
 export type OrderContext = {
@@ -160,4 +382,50 @@ export type ProcessedEmail = {
   issueCount: number;
   previewText: string;
   queueItemId?: string;
+  isCustomerPriority?: boolean;
+  customerMatch?: CustomerMatch;
+};
+
+export type WorkflowThread = {
+  id: string;
+  groupKey: string;
+  title: string;
+  subtitle: string;
+  items: ProcessedEmail[];
+  representativeItem: ProcessedEmail;
+  latestReceivedAt: string;
+  oldestReceivedAt: string;
+  latestActivityAt: string;
+  itemCount: number;
+  customerName?: string;
+  locationId?: string;
+  assignedRepId?: string;
+  assignedRepName?: string;
+  assignedRepInitials?: string;
+  customerAssignedRepIds?: string[];
+  customerAssignedRepNames?: string[];
+  customerAssignedRepInitials?: string[];
+  assignmentType?: "auto" | "manual";
+  currentAssignment?: AssignmentRecord;
+  assignmentHistory: AssignmentRecord[];
+  status: WorkflowStatus;
+  resolvedAt?: string;
+  notes: EmailInternalNote[];
+  replyLog: ReplyLogEntry[];
+  snooze?: SnoozeState;
+  isSnoozed: boolean;
+  noteCount: number;
+  replyCount: number;
+  activePresence?: ThreadPresenceRecord;
+  activePresenceRecords: ThreadPresenceRecord[];
+  slaMinutes: number;
+  firstReplyAt?: string;
+  sla: {
+    firstResponse: WorkflowThreadSlaStatus;
+    resolution: WorkflowThreadSlaStatus;
+    current: WorkflowThreadSlaStatus;
+  };
+  updatedAt?: string;
+  updatedByRepId?: string;
+  updatedByRepName?: string;
 };

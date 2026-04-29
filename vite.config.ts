@@ -5,6 +5,7 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { handleInboxMessagesRequest } from "./server/inbox/inboxRoutes";
 import { getInboxPage, importInboxEmail } from "./server/inboxImportStore";
+import { checkDatabaseConnection } from "./src/persistence/mariadb/database";
 
 const certKeyPath = resolve(__dirname, "certs", "localhost-key.pem");
 const certPath = resolve(__dirname, "certs", "localhost.pem");
@@ -52,6 +53,18 @@ async function readRequestBody(req: {
   });
 }
 
+async function handleDatabaseHealthRequest(res: {
+  statusCode: number;
+  setHeader(name: string, value: string): void;
+  end(chunk?: string): void;
+}) {
+  const health = await checkDatabaseConnection();
+
+  res.statusCode = health.ok ? 200 : 503;
+  res.setHeader("Content-Type", "application/json");
+  res.end(JSON.stringify({ database: health }));
+}
+
 function inboxApiPlugin() {
   const routeHandler = async (req: {
     headers?: {
@@ -73,6 +86,11 @@ function inboxApiPlugin() {
     }
 
     const url = new URL(req.url, "https://localhost");
+
+    if (req.method === "GET" && url.pathname === "/api/database/health") {
+      await handleDatabaseHealthRequest(res);
+      return;
+    }
 
     if (req.method === "GET" && url.pathname === "/api/inbox/messages") {
       await handleInboxMessagesRequest(req, res);
@@ -113,7 +131,8 @@ function inboxApiPlugin() {
     if (
       url.pathname !== "/api/inbox" &&
       url.pathname !== "/api/inbox/import" &&
-      url.pathname !== "/api/inbox/messages"
+      url.pathname !== "/api/inbox/messages" &&
+      url.pathname !== "/api/database/health"
     ) {
       next();
       return;
@@ -137,6 +156,7 @@ function inboxApiPlugin() {
 
 export default defineConfig({
   plugins: [react(), inboxApiPlugin()],
+  envPrefix: ["VITE_", "ACTION_DESK_"],
   server: {
     host: "localhost",
     port: 5173,

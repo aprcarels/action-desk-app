@@ -131,6 +131,35 @@ describe("customerServiceMail", () => {
     ).toBe(true);
   });
 
+  it("keeps broad customer-looking order follow-ups visible in customer service queue", () => {
+    const email = buildEmail({
+      senderEmail: "buyer@example.com",
+      subject: "Need update on ORD-48291",
+      body: "Hi team, can you send an update on ORD-48291? Customer is asking when it will deliver.",
+      previewText: "Can you send an update on ORD-48291?",
+    });
+
+    const normalized = normalizeProcessedEmailResult(
+      email,
+      buildResult({
+        analysis: {
+          ...buildResult().analysis,
+          intent: "general_support",
+          orderNumber: undefined,
+          caseIdentifiers: undefined,
+          risks: [],
+          summary: "Customer is asking for an update.",
+          nextAction: "Review the request details and reply with the next support step.",
+        },
+      }),
+    );
+
+    expect(normalized.analysis.workType).toBe("customer_support");
+    expect(
+      shouldShowInCustomerServiceQueue(buildProcessedEmail(email, normalized)),
+    ).toBe(true);
+  });
+
   it("keeps an explicit latest-message cancellation request in customer support handling", () => {
     const email = buildEmail({
       senderEmail: "customer@example.com",
@@ -273,5 +302,36 @@ describe("customerServiceMail", () => {
     expect(["internal", "vendor"]).toContain(normalized.analysis.workType);
     expect(normalized.analysis.replyNeeded).toBe("no");
     expect(normalized.replyDraft).toBe("");
+  });
+
+  it("keeps automated system notifications out of the customer service queue", () => {
+    const email = buildEmail({
+      senderEmail: "noreply@system.example.com",
+      subject: "Password reset notification",
+      body: "This is an automated notification. Do not reply.",
+      previewText: "This is an automated notification. Do not reply.",
+    });
+
+    const normalized = normalizeProcessedEmailResult(
+      email,
+      buildResult({
+        analysis: {
+          ...buildResult().analysis,
+          intent: "general_support",
+          orderNumber: undefined,
+          risks: [],
+          hasClearRequest: false,
+          actionability: "review_needed",
+          replyNeeded: "maybe",
+          summary: "Automated notification.",
+          nextAction: "Review the message.",
+        },
+      }),
+    );
+
+    expect(normalized.analysis.workType).toBe("system");
+    expect(
+      shouldShowInCustomerServiceQueue(buildProcessedEmail(email, normalized)),
+    ).toBe(false);
   });
 });

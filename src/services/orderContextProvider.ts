@@ -11,6 +11,10 @@ export type OrderContextProvider = {
 };
 
 type OrderContextSource = "real" | "mock";
+type CreateOrderContextProviderOptions = {
+  source?: OrderContextSource;
+  apiBaseUrl?: string;
+};
 
 function getEnvValue(name: string): string | undefined {
   if (typeof process !== "undefined" && process.env && typeof process.env[name] === "string") {
@@ -34,7 +38,19 @@ export function getOrderContextProvider(): OrderContextProvider {
   const source = resolveOrderContextSource();
   const apiBaseUrl = resolveOrderContextApiBaseUrl();
 
-  if (source === "real") {
+  return createOrderContextProvider({
+    source,
+    apiBaseUrl,
+  });
+}
+
+export function createOrderContextProvider(
+  options?: CreateOrderContextProviderOptions,
+): OrderContextProvider {
+  const source = options?.source ?? resolveOrderContextSource();
+  const apiBaseUrl = options?.apiBaseUrl ?? resolveOrderContextApiBaseUrl();
+
+  if (source === "real" && apiBaseUrl) {
     return createRealOrderContextProvider({
       apiBaseUrl,
     });

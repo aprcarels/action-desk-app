@@ -9,6 +9,8 @@ function mapInboxProviderToMailboxSource(
       return "outlook_graph";
     case "outlook_addin_import":
       return "imported";
+    case "test_data":
+      return "mock";
     case "dev_json":
     default:
       return "mock";
@@ -51,8 +53,8 @@ export function mapRawInboxEmailToMailboxMessage(rawEmail: RawInboxEmail): Mailb
     folderName: null,
     fromName: rawEmail.fromName.trim() || null,
     fromEmail: rawEmail.fromEmail.trim(),
-    toEmails: [],
-    ccEmails: [],
+    toEmails: rawEmail.toRecipients?.map((recipient) => recipient.trim()).filter(Boolean) ?? [],
+    ccEmails: rawEmail.ccRecipients?.map((recipient) => recipient.trim()).filter(Boolean) ?? [],
     subject: rawEmail.subject.trim() || "(no subject)",
     bodyPreview: rawEmail.previewText?.trim() || null,
     bodyText: rawEmail.bodyText.trim() || null,
@@ -60,7 +62,7 @@ export function mapRawInboxEmailToMailboxMessage(rawEmail: RawInboxEmail): Mailb
     sentAt: null,
     isRead: false,
     hasAttachments: false,
-    webLink: null,
+    webLink: rawEmail.outlookWebLink?.trim() || null,
     extractedIdentifiers: {
       orderNumber: extractIdentifier(rawEmail, /\bORD-\d+\b/i),
       caseNumber: extractIdentifier(rawEmail, /\b(?:CASE|TICKET|REF)[-:\s#]*[A-Z0-9-]{4,}\b/i),

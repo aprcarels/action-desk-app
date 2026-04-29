@@ -1,10 +1,8 @@
 const path = require("path");
-const dotenv = require("dotenv");
+require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
 
-// Load .env for Electron main process BEFORE importing app code
-dotenv.config({ path: path.join(__dirname, "../.env") });
-
-const { app, BrowserWindow, ipcMain } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain } = require("electron");
+const { startDesktopAppServer } = require("./appServer.cjs");
 
 const {
   createRepositoryBundle,
@@ -23,14 +21,21 @@ const {
 } = require("../dist-electron/mappers/mapRawInboxEmailToMailboxMessage");
 
 const {
-  isDeviceCodeAuthEnabled,
-  signInDesktop,
-  getDesktopAccessToken,
+  getAccessTokenForSession,
+  hasSessionContext,
+  signInWithMicrosoft,
+  signOutSession,
 } = require("./auth.cjs");
 
 const isDev = !app.isPackaged;
+const DESKTOP_DEV_ORIGIN = "https://localhost:5173";
 
 let queueManager = null;
+let desktopAppServer = null;
+let desktopAppOrigin = isDev ? DESKTOP_DEV_ORIGIN : null;
+let desktopApiOrigin = null;
+let desktopLogFilePath = null;
+let mainWindowRef = null;
 
 function getQueueManager() {
   if (!queueManager) {
@@ -50,6 +55,9 @@ function getDesktopRuntimeInfo() {
     userDataPath,
     recommendedRepositoryBackend: "sqlite",
     inboxSource: process.env.VITE_INBOX_SOURCE || "dev",
+    appOrigin: desktopAppOrigin,
+    apiOrigin: desktopApiOrigin,
+    logFilePath: desktopLogFilePath,
   };
 }
 
@@ -91,8 +99,12 @@ function createWindow() {
   const mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
-    minWidth: 1100,
-    minHeight: 700,
+    minWidth: 700,
+    minHeight: 500,
+    resizable: true,
+    maximizable: true,
+    minimizable: true,
+    movable: true,
     autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
@@ -110,33 +122,110 @@ function createWindow() {
     },
   );
 
-  if (isDev) {
-    mainWindow.loadURL("https://localhost:5173");
-  } else {
-    mainWindow.loadFile(path.join(__dirname, "../dist/index.html"));
+  if (!desktopAppOrigin) {
+    throw new Error("Desktop app origin was not initialized before window creation.");
   }
+
+  mainWindow.loadURL(desktopAppOrigin);
+  mainWindowRef = mainWindow;
+
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    console.log("[Electron][popup] window.open requested:", url);
+    return { action: "allow" };
+  });
+
+  mainWindow.webContents.on("did-create-window", (childWindow) => {
+    console.log("[Electron][popup] popup window created");
+
+    childWindow.webContents.on("did-start-navigation", (_event, url) => {
+      console.log("[Electron][popup] did-start-navigation:", url);
+    });
+
+    childWindow.webContents.on("did-navigate", (_event, url) => {
+      console.log("[Electron][popup] did-navigate:", url);
+    });
+
+    childWindow.webContents.on("did-frame-finish-load", (_event, isMainFrame) => {
+      if (isMainFrame) {
+        console.log("[Electron][popup] did-frame-finish-load:", childWindow.webContents.getURL());
+      }
+    });
+
+    childWindow.webContents.on(
+      "console-message",
+      (_event, level, message, line, sourceId) => {
+        console.log(
+          `[Popup console][${level}] ${message} (${sourceId}:${line})`,
+        );
+      },
+    );
+
+    childWindow.on("closed", () => {
+      console.log("[Electron][popup] popup window closed");
+    });
+  });
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  try {
+    desktopAppServer = await startDesktopAppServer({
+      distDir: path.join(__dirname, "../dist"),
+      databasePath: path.join(app.getPath("userData"), "action-desk-shared.sqlite"),
+      authProvider: {
+        getAccessTokenForSession,
+        hasSessionContext,
+        signOutSession,
+      },
+    });
+    desktopApiOrigin = desktopAppServer.origin;
+    desktopLogFilePath = desktopAppServer.logger?.getLogFilePath?.() ?? null;
+
+    if (!isDev) {
+      desktopAppOrigin = desktopAppServer.origin;
+    }
+  } catch (error) {
+    const message =
+      error instanceof Error
+        ? error.message
+        : "The packaged desktop app server could not be started.";
+
+    dialog.showErrorBox("Action Desk startup failed", message);
+    app.quit();
+    return;
+  }
+
   ipcMain.handle("actionDesk:getDesktopRuntimeInfo", async () => {
     return getDesktopRuntimeInfo();
   });
 
-  if (isDeviceCodeAuthEnabled()) {
-    console.warn(
-      "[Electron] ACTION_DESK_ENABLE_DEVICE_CODE_AUTH=true; enabling device-code auth fallback.",
-    );
+  ipcMain.handle("actionDesk:auth:signInWithMicrosoft", async () => {
+    try {
+      const authResult = await signInWithMicrosoft();
+      const session = desktopAppServer.store.startSessionForIdentity(
+        authResult.sessionId,
+        authResult.identity,
+      );
+      desktopAppServer.logger?.info("auth", "Microsoft sign-in completed.", {
+        sessionId: session.sessionId,
+        repId: session.currentUser?.id,
+      });
+      return session;
+    } catch (error) {
+      desktopAppServer.logger?.error("auth", "Microsoft sign-in failed.", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
+    }
+  });
 
-    ipcMain.handle("actionDesk:auth:signIn", async () => {
-      console.log("[Electron] actionDesk:auth:signIn called");
-      return signInDesktop();
+  ipcMain.handle("actionDesk:auth:signOut", async (_, sessionId) => {
+    signOutSession(sessionId);
+    desktopAppServer.store.logout(sessionId);
+    desktopAppServer.logger?.info("auth", "Microsoft sign-out completed.", {
+      sessionId,
     });
-
-    ipcMain.handle("actionDesk:auth:getAccessToken", async () => {
-      console.log("[Electron] actionDesk:auth:getAccessToken called");
-      return getDesktopAccessToken();
-    });
-  }
+    return { sessionId };
+  });
 
   ipcMain.handle("actionDesk:queue:ingestRawEmails", async (_, rawInput) => {
     const rawEmails = normalizeRawEmailArray(rawInput);
@@ -240,6 +329,18 @@ app.whenReady().then(() => {
       createWindow();
     }
   });
+});
+
+app.on("before-quit", async () => {
+  if (desktopAppServer) {
+    try {
+      await desktopAppServer.close();
+    } catch (error) {
+      console.warn("[Electron] desktop app server close failed:", error);
+    } finally {
+      desktopAppServer = null;
+    }
+  }
 });
 
 app.on("window-all-closed", () => {

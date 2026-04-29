@@ -6,6 +6,7 @@ function cloneProcessedEmail(item: ProcessedEmail): ProcessedEmail {
   return {
     ...item,
     email: { ...item.email },
+    customerMatch: item.customerMatch ? { ...item.customerMatch } : undefined,
     result: item.result
       ? {
           ...item.result,
@@ -37,6 +38,21 @@ export function setCachedProcessedEmail(item: ProcessedEmail) {
   }
 
   processedEmailCache.set(item.email.id, cloneProcessedEmail(item));
+}
+
+export function updateProcessedEmailCache(
+  updater: (item: ProcessedEmail) => ProcessedEmail,
+) {
+  for (const [id, item] of processedEmailCache.entries()) {
+    const nextItem = updater(cloneProcessedEmail(item));
+
+    if (nextItem.status !== "processed" || !nextItem.result) {
+      processedEmailCache.delete(id);
+      continue;
+    }
+
+    processedEmailCache.set(id, cloneProcessedEmail(nextItem));
+  }
 }
 
 export function clearProcessedEmailCache() {

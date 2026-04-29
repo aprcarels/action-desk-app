@@ -116,7 +116,13 @@ async function ensureSignedIn(client: PublicClientApplication) {
   }
 
   if (!loginPopupPromise) {
-    loginPopupPromise = client.loginPopup(createMailReadPopupRequest());
+    const popupRequest = createMailReadPopupRequest();
+    console.info("[auth] starting loginPopup", {
+      redirectUri: popupRequest.redirectUri,
+      origin: typeof window !== "undefined" ? window.location.origin : undefined,
+    });
+
+    loginPopupPromise = client.loginPopup(popupRequest);
   }
 
   try {

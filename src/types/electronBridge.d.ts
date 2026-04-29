@@ -4,7 +4,6 @@ declare global {
   interface Window {
     actionDeskDesktop?: {
       isElectron?: boolean;
-      deviceCodeAuthEnabled?: boolean;
       ingestRawEmails?: (rawEmails: unknown[]) => Promise<{
         queueItems: unknown[];
       }>;
@@ -14,6 +13,9 @@ declare global {
         userDataPath: string;
         recommendedRepositoryBackend: "sqlite";
         inboxSource?: string;
+        appOrigin?: string | null;
+        apiOrigin?: string | null;
+        logFilePath?: string | null;
       }>;
       loadQueue?: (options?: {
         cursor?: string;
@@ -35,11 +37,21 @@ declare global {
         status: string,
       ) => Promise<unknown>;
       markResolved?: (queueItemId: string) => Promise<unknown>;
-      signIn?: () => Promise<{
-        username: string;
-        expiresAt: number;
+      signInWithMicrosoft?: () => Promise<{
+        sessionId: string;
+        currentUser: {
+          id: string;
+          name: string;
+          initials: string;
+          email: string;
+          role: "rep" | "supervisor" | "admin";
+          isActive?: boolean;
+        } | null;
+        capabilities: string[];
       }>;
-      getAccessToken?: () => Promise<string>;
+      signOut?: (sessionId: string) => Promise<{
+        sessionId: string;
+      }>;
     };
   }
 }

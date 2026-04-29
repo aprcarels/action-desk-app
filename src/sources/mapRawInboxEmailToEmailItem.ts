@@ -20,6 +20,10 @@ function mapInboxProviderToEmailSource(
     return "outlook_graph";
   }
 
+  if (provider === "test_data") {
+    return "test_data";
+  }
+
   return "seeded";
 }
 
@@ -29,6 +33,8 @@ export function mapRawInboxEmailToEmailItem(rawEmail: RawInboxEmail): EmailItem 
 
   return {
     id: rawEmail.id,
+    conversationId: rawEmail.threadId?.trim() || undefined,
+    locationId: rawEmail.locationId?.trim() || undefined,
     senderName: rawEmail.fromName.trim() || rawEmail.fromEmail.trim() || "Unknown sender",
     senderEmail: rawEmail.fromEmail.trim(),
     subject: rawEmail.subject.trim() || "(no subject)",
@@ -37,5 +43,6 @@ export function mapRawInboxEmailToEmailItem(rawEmail: RawInboxEmail): EmailItem 
     previewText,
     provider: rawEmail.provider,
     source: mapInboxProviderToEmailSource(rawEmail.provider),
+    outlookWebLink: rawEmail.outlookWebLink?.trim() || undefined,
   };
 }

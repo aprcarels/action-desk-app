@@ -1,4 +1,5 @@
 type EnvKey =
+  | "ACTION_DESK_ENABLE_DEMO_DATA"
   | "DEV"
   | "VITE_INBOX_SOURCE"
   | "VITE_PILOT_MODE"
@@ -6,29 +7,56 @@ type EnvKey =
   | "VITE_AZURE_TENANT_ID"
   | "VITE_AZURE_AUTHORITY"
   | "VITE_AZURE_REDIRECT_URI"
-  | "VITE_USE_PERSISTED_QUEUE";
+  | "VITE_USE_PERSISTED_QUEUE"
+  | "VITE_GROUP_INBOX_ADDRESSES"
+  | "VITE_SHOW_DEBUG_UI";
 
-type ViteEnv = ImportMetaEnv & Record<string, string | boolean | undefined>;
+type RuntimeEnvSource = Record<string, string | boolean | undefined>;
 
-function readFromViteEnv(key: string): string | undefined {
-  try {
-    const viteEnv = import.meta.env as ViteEnv | undefined;
-    const value = viteEnv?.[key];
+function normalizeEnvValue(value: string | boolean | undefined): string | undefined {
+  if (typeof value === "string") {
+    return value;
+  }
 
-    if (typeof value === "string") {
-      return value;
-    }
+  if (typeof value === "boolean") {
+    return value ? "true" : "false";
+  }
 
-    if (typeof value === "boolean") {
-      return value ? "true" : "false";
-    }
+  return undefined;
+}
 
-    return undefined;
-  } catch {
+function getRuntimeEnvStore(): RuntimeEnvSource | undefined {
+  const runtimeGlobal = globalThis as typeof globalThis & {
+    __ACTION_DESK_ENV__?: RuntimeEnvSource;
+  };
+
+  return runtimeGlobal.__ACTION_DESK_ENV__;
+}
+
+function readFromRuntimeStore(key: string): string | undefined {
+  return normalizeEnvValue(getRuntimeEnvStore()?.[key]);
+}
+
+function readFromProcessEnv(key: string): string | undefined {
+  if (
+    typeof process === "undefined" ||
+    !process.env ||
+    typeof process.env[key] !== "string"
+  ) {
     return undefined;
   }
+
+  return process.env[key];
+}
+
+export function setRuntimeEnv(source: RuntimeEnvSource): void {
+  const runtimeGlobal = globalThis as typeof globalThis & {
+    __ACTION_DESK_ENV__?: RuntimeEnvSource;
+  };
+
+  runtimeGlobal.__ACTION_DESK_ENV__ = source;
 }
 
 export function getEnv(key: EnvKey): string | undefined {
-  return readFromViteEnv(key);
+  return readFromRuntimeStore(key) ?? readFromProcessEnv(key);
 }

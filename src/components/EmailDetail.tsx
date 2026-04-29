@@ -1,21 +1,35 @@
+import { useEffect, useRef, useState } from "react";
+import { ContextPanel } from "./ContextPanel";
+import { DetailActionBar } from "./DetailActionBar";
+import { QueueNavigationControls } from "./QueueNavigationControls";
+import { StatusPill } from "./StatusPill";
+import { ThreadConversationView } from "./ThreadConversationView";
+import { getCustomerMatchSourceLabel } from "../services/customerMatching";
 import {
-  deriveIssueType,
-  getIssueTypeDraftExplanation,
-  getIssueTypeLabel,
-} from "../domain/issueType";
-import { getIntentLabel, getRiskLabel } from "../services/analysisTaxonomy";
-import { getWorkTypeLabel } from "../services/customerServiceMail";
-import { buildOutlookSearchUrl, canOpenInOutlook } from "../services/openInOutlook";
-import { getPilotQueueViewForItem } from "../services/pilotQueueState";
+  canCurrentUserTakeThread,
+  getDefaultTakeThreadReason,
+} from "../services/manualAssignment";
+import {
+  getOutlookOpenTarget,
+  hasExactOutlookMessageLink,
+} from "../services/openInOutlook";
 import { getQueueAgeInfo } from "../services/queueAging";
+import type { MacroDefinition, MacroId } from "../services/macros";
 import type {
+  AssignmentReason,
   PilotQueueItemState,
   PilotUsefulnessFeedback,
   ProcessedEmail,
+  RepProfile,
+  WorkflowStatus,
+  WorkflowThread,
 } from "../types/actionDesk";
 
 type EmailDetailProps = {
   item?: ProcessedEmail;
+  thread?: WorkflowThread;
+  reps: RepProfile[];
+  currentRep?: RepProfile;
   pilotMode: boolean;
   pilotItemState?: PilotQueueItemState;
   orderDataMessage?: string;
@@ -25,10 +39,33 @@ type EmailDetailProps = {
   rawCaseCopyFeedback: "idle" | "success" | "error";
   regeneratingReply: boolean;
   replyActionError: string | null;
+  macros: MacroDefinition[];
+  showBackButton?: boolean;
+  isCompactWorkspace?: boolean;
+  navigation?: {
+    currentPosition?: number;
+    total: number;
+    hasPrevious: boolean;
+    hasNext: boolean;
+    onPrevious: () => void;
+    onNext: () => void;
+  };
+  onBackToQueue?: () => void;
   onCopyReply: () => void;
   onCopyCaseForReview: () => void;
   onCopyRawCaseJson: () => void;
   onRegenerateReply: () => void;
+  onThreadStatusChange: (threadId: string, status: WorkflowStatus) => void;
+  onAddInternalNote: (threadId: string, body: string) => void;
+  onLogReply: (threadId: string) => void;
+  onSnoozeThread: (
+    threadId: string,
+    mode: "1h" | "4h" | "tomorrow" | "custom",
+    customValue?: string,
+  ) => void;
+  onUnsnoozeThread: (threadId: string) => void;
+  onTakeThread: (threadId: string, reason: AssignmentReason) => void;
+  onApplyMacro: (threadId: string, macroId: MacroId) => void;
   onRecomputePriority: () => void;
   onMarkPilotItemActive: () => void;
   onMarkPilotItemDone: () => void;
@@ -36,6 +73,7 @@ type EmailDetailProps = {
   onMarkPilotItemWaitingOnCustomer: () => void;
   onSnoozePilotItemUntilTomorrow: () => void;
   onSetPilotUsefulness: (usefulness: PilotUsefulnessFeedback) => void;
+  showDebugActions?: boolean;
 };
 
 function formatReceivedTime(receivedAt: string) {
@@ -47,62 +85,40 @@ function formatReceivedTime(receivedAt: string) {
   });
 }
 
-function getPriorityLabel(priorityScore: number): "High" | "Medium" | "Low" {
-  if (priorityScore >= 70) {
-    return "High";
-  }
-
-  if (priorityScore >= 40) {
-    return "Medium";
-  }
-
-  return "Low";
+function isOutlookEmailSource(source?: ProcessedEmail["email"]["source"]) {
+  return source === "outlook_import" || source === "outlook_graph";
 }
 
-function formatPriorityBreakdownLabel(label: string) {
-  if (!label.startsWith("Risk: ")) {
-    return label;
-  }
-
-  const riskCode = label.slice("Risk: ".length) as NonNullable<
-    ProcessedEmail["result"]
-  >["analysis"]["risks"][number];
-  return `Risk: ${getRiskLabel(riskCode)}`;
-}
-
-function getActionabilityLabel(
-  actionability: NonNullable<ProcessedEmail["result"]>["analysis"]["actionability"],
-): string {
-  switch (actionability) {
-    case "action_required":
-      return "Action required";
-    case "awareness_only":
-      return "Awareness only";
-    case "no_action_needed":
-      return "No action needed";
-    case "review_needed":
-      return "Review needed";
-    default:
-      return "Review needed";
-  }
-}
-
-function getReplyNeededLabel(
-  replyNeeded: NonNullable<ProcessedEmail["result"]>["analysis"]["replyNeeded"],
-): string {
-  switch (replyNeeded) {
-    case "yes":
-      return "Reply recommended";
-    case "no":
-      return "Reply not recommended";
-    case "maybe":
-    default:
-      return "Reply optional";
-  }
+function renderStateCard(
+  title: string,
+  body: React.ReactNode,
+  emphasisColor = "#334155",
+) {
+  return (
+    <div style={panelStyle}>
+      <h2 style={titleStyle}>{title}</h2>
+      <div
+        style={{
+          border: "1px solid #dbe4ee",
+          borderRadius: "14px",
+          backgroundColor: "#fcfdff",
+          padding: "16px",
+          fontSize: "14px",
+          lineHeight: 1.7,
+          color: emphasisColor,
+        }}
+      >
+        {body}
+      </div>
+    </div>
+  );
 }
 
 export function EmailDetail({
   item,
+  thread,
+  reps,
+  currentRep,
   pilotMode,
   pilotItemState,
   orderDataMessage,
@@ -112,10 +128,22 @@ export function EmailDetail({
   rawCaseCopyFeedback,
   regeneratingReply,
   replyActionError,
+  macros,
+  showBackButton,
+  isCompactWorkspace = false,
+  navigation,
+  onBackToQueue,
   onCopyReply,
   onCopyCaseForReview,
   onCopyRawCaseJson,
   onRegenerateReply,
+  onThreadStatusChange,
+  onAddInternalNote,
+  onLogReply,
+  onSnoozeThread,
+  onUnsnoozeThread,
+  onTakeThread,
+  onApplyMacro,
   onRecomputePriority,
   onMarkPilotItemActive,
   onMarkPilotItemDone,
@@ -123,629 +151,387 @@ export function EmailDetail({
   onMarkPilotItemWaitingOnCustomer,
   onSnoozePilotItemUntilTomorrow,
   onSetPilotUsefulness,
+  showDebugActions = false,
 }: EmailDetailProps) {
-  function isOutlookEmailSource(source?: ProcessedEmail["email"]["source"]) {
-    return source === "outlook_import" || source === "outlook_graph";
-  }
+  const [notesOpen, setNotesOpen] = useState(false);
+  const [replyHistoryOpen, setReplyHistoryOpen] = useState(false);
+  const [olderMessagesOpen, setOlderMessagesOpen] = useState(false);
+  const [showContextPanel, setShowContextPanel] = useState(!isCompactWorkspace);
+  const [outlookStatusMessage, setOutlookStatusMessage] = useState<string | null>(
+    null,
+  );
+  const [takeThreadReason, setTakeThreadReason] = useState<AssignmentReason>(
+    "Unassigned",
+  );
+  const notesComposerRef = useRef<HTMLTextAreaElement | null>(null);
+  const notesSectionRef = useRef<HTMLDivElement | null>(null);
+  const replyHistorySectionRef = useRef<HTMLDivElement | null>(null);
+  const olderMessagesSectionRef = useRef<HTMLDivElement | null>(null);
 
-  const panelStyle: React.CSSProperties = {
-    backgroundColor: "#ffffff",
-    border: "1px solid #d8e1ec",
-    borderRadius: "16px",
-    boxShadow: "0 10px 30px rgba(15, 23, 42, 0.06)",
-    minHeight: "100%",
-    padding: "24px",
-    boxSizing: "border-box",
-  };
+  useEffect(() => {
+    if (!thread) {
+      return;
+    }
 
-  const sectionStyle: React.CSSProperties = {
-    marginBottom: "20px",
-  };
+    setNotesOpen(thread.notes.length > 0);
+    setReplyHistoryOpen(thread.replyLog.length > 0);
+    setOlderMessagesOpen(false);
+    setTakeThreadReason(getDefaultTakeThreadReason(thread));
+  }, [thread?.id]);
 
-  const sectionCardStyle: React.CSSProperties = {
-    border: "1px solid #e2e8f0",
-    borderRadius: "14px",
-    backgroundColor: "#fcfdff",
-    padding: "16px",
-    marginBottom: "16px",
-  };
+  useEffect(() => {
+    setShowContextPanel(!isCompactWorkspace);
+  }, [isCompactWorkspace]);
 
-  const titleStyle: React.CSSProperties = {
-    margin: 0,
-    fontSize: "24px",
-    fontWeight: 700,
-    color: "#0f172a",
-  };
-
-  const sectionTitleStyle: React.CSSProperties = {
-    margin: "0 0 8px",
-    fontSize: "15px",
-    fontWeight: 700,
-    color: "#0f172a",
-  };
-
-  const textStyle: React.CSSProperties = {
-    margin: 0,
-    fontSize: "14px",
-    lineHeight: 1.7,
-    color: "#334155",
-  };
-
-  const bodyBlockStyle: React.CSSProperties = {
-    margin: 0,
-    padding: "16px",
-    borderRadius: "12px",
-    border: "1px solid #dbe4ee",
-    backgroundColor: "#f8fafc",
-    whiteSpace: "pre-wrap",
-    fontSize: "13px",
-    lineHeight: 1.7,
-    color: "#334155",
-  };
-
-  const actionCalloutStyle: React.CSSProperties = {
-    border: "1px solid #bfdbfe",
-    backgroundColor: "#eff6ff",
-    borderRadius: "12px",
-    padding: "16px",
-  };
-
-  const replyActionsStyle: React.CSSProperties = {
-    display: "flex",
-    gap: "10px",
-    flexWrap: "wrap",
-    alignItems: "center",
-  };
-
-  const secondaryButtonStyle: React.CSSProperties = {
-    border: "1px solid #cbd5e1",
-    backgroundColor: "#ffffff",
-    color: "#0f172a",
-    borderRadius: "10px",
-    padding: "8px 12px",
-    fontSize: "13px",
-    fontWeight: 700,
-    cursor: "pointer",
-  };
-
-  const sourceBadgeStyle: React.CSSProperties = {
-    display: "inline-flex",
-    alignItems: "center",
-    fontSize: "12px",
-    fontWeight: 700,
-    color: "#0f766e",
-    backgroundColor: "#ccfbf1",
-    borderRadius: "999px",
-    padding: "4px 8px",
-    marginTop: "8px",
-  };
-
-  const pilotItemView = pilotItemState ? getPilotQueueViewForItem(pilotItemState) : "active";
+  useEffect(() => {
+    setOutlookStatusMessage(null);
+  }, [item?.email.id]);
 
   if (!item) {
-    return (
-      <div style={panelStyle}>
-        <h2 style={titleStyle}>Email Detail</h2>
-        <p style={{ ...textStyle, marginTop: "10px" }}>
-          Select an email from the queue to view the analysis and reply draft.
-        </p>
-      </div>
+    return renderStateCard(
+      "Support Workspace",
+      "Select a queue item to review the conversation, draft the response, and update the workflow context.",
     );
   }
 
   if (item.status === "failed") {
-    return (
-      <div style={panelStyle}>
-        <div style={sectionStyle}>
-          <h2 style={titleStyle}>{item.email.subject}</h2>
-          {isOutlookEmailSource(item.email.source) && (
-            <div style={sourceBadgeStyle}>Imported from Outlook</div>
-          )}
-          <p style={{ ...textStyle, marginTop: "8px" }}>
-            <strong>Sender:</strong> {item.email.senderName} ({item.email.senderEmail})
-          </p>
-          <p style={textStyle}>
-            <strong>Received:</strong> {formatReceivedTime(item.email.receivedAt)}
-          </p>
-        </div>
-
-        <div style={sectionCardStyle}>
-          <h3 style={sectionTitleStyle}>Processing Status</h3>
-          <p style={{ ...textStyle, color: "#991b1b" }}>
-            {item.processingError ?? "This email could not be processed."}
-          </p>
-        </div>
-
-        <div style={sectionCardStyle}>
-          <h3 style={sectionTitleStyle}>Customer Email</h3>
-          <pre style={bodyBlockStyle}>
-            {item.email.body.trim() || "No email body available for this message."}
-          </pre>
-        </div>
-      </div>
+    return renderStateCard(
+      item.email.subject,
+      <>
+        <p style={{ margin: 0 }}>
+          <strong>Sender:</strong> {item.email.senderName} ({item.email.senderEmail})
+        </p>
+        <p style={{ margin: "8px 0 0", color: "#991b1b" }}>
+          {item.processingError ?? "This email could not be processed."}
+        </p>
+        <pre style={{ ...bodyBlockStyle, marginTop: "16px" }}>
+          {item.email.body.trim() || "No email body available for this message."}
+        </pre>
+      </>,
+      "#991b1b",
     );
   }
 
   if (item.status === "pending" || !item.result) {
-    return (
-      <div style={panelStyle}>
-        <div style={sectionStyle}>
-          <h2 style={titleStyle}>{item.email.subject}</h2>
-          {isOutlookEmailSource(item.email.source) && (
-            <div style={sourceBadgeStyle}>Imported from Outlook</div>
-          )}
-          <p style={{ ...textStyle, marginTop: "8px" }}>
-            <strong>Sender:</strong> {item.email.senderName} ({item.email.senderEmail})
-          </p>
-          <p style={textStyle}>
-            <strong>Received:</strong> {formatReceivedTime(item.email.receivedAt)}
-          </p>
-        </div>
-
-        <div style={sectionCardStyle}>
-          <h3 style={sectionTitleStyle}>Processing Status</h3>
-          <p style={textStyle}>This email is currently being processed.</p>
-        </div>
-
-        <div style={sectionCardStyle}>
-          <h3 style={sectionTitleStyle}>Customer Email</h3>
-          <pre style={bodyBlockStyle}>
-            {item.email.body.trim() || "No email body available for this message."}
-          </pre>
-        </div>
-      </div>
+    return renderStateCard(
+      item.email.subject,
+      <>
+        <p style={{ margin: 0 }}>
+          <strong>Sender:</strong> {item.email.senderName} ({item.email.senderEmail})
+        </p>
+        <p style={{ margin: "8px 0 0" }}>This email is currently being processed.</p>
+        <pre style={{ ...bodyBlockStyle, marginTop: "16px" }}>
+          {item.email.body.trim() || "No email body available for this message."}
+        </pre>
+      </>,
     );
   }
 
-  const draftIssueType = deriveIssueType(item.result.analysis, item.result.orderContext);
-  const canOpenOutlook = canOpenInOutlook(item);
+  if (!thread) {
+    return renderStateCard(
+      item.email.subject,
+      "The selected email is available, but the thread context could not be built right now.",
+    );
+  }
+
+  const hasExactOutlookLink = hasExactOutlookMessageLink(item);
+  const canTakeThread = canCurrentUserTakeThread(thread, currentRep);
   const queueAge = getQueueAgeInfo({
-    receivedAt: item.email.receivedAt,
+    receivedAt: thread.oldestReceivedAt,
     pilotItemState: pilotMode ? pilotItemState : undefined,
   });
+  const presence = thread.activePresence;
+  const presenceCopy = presence
+    ? presence.activeUserId === currentRep?.id
+      ? `You are ${presence.presenceType === "working" ? "working" : "viewing"} this thread`
+      : `${presence.activeUserName} is ${
+          presence.presenceType === "working" ? "actively working" : "viewing"
+        } this thread`
+    : undefined;
+
+  function jumpToNotes() {
+    setNotesOpen(true);
+    window.setTimeout(() => {
+      notesSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      notesComposerRef.current?.focus();
+    }, 0);
+  }
 
   return (
     <div style={panelStyle}>
-      <div style={sectionStyle}>
-        <h2 style={titleStyle}>{item.email.subject}</h2>
-        {isOutlookEmailSource(item.email.source) && (
-          <div style={sourceBadgeStyle}>Imported from Outlook</div>
-        )}
-        <p style={{ ...textStyle, marginTop: "8px" }}>
-          <strong>Sender:</strong> {item.email.senderName} ({item.email.senderEmail})
-        </p>
-        <p style={textStyle}>
-          <strong>Received:</strong> {formatReceivedTime(item.email.receivedAt)}
-        </p>
-        <p style={textStyle}>
-          <strong>Queue Age:</strong> {queueAge.label}
-        </p>
-      </div>
-
-      <div style={sectionCardStyle}>
-        <h3 style={sectionTitleStyle}>Customer Email</h3>
-        <pre style={bodyBlockStyle}>
-          {item.email.body.trim() || "No email body available for this message."}
-        </pre>
-      </div>
-
-      <div style={sectionCardStyle}>
-        <h3 style={sectionTitleStyle}>AI Summary</h3>
-        <p style={textStyle}>{item.result.analysis.summary || "No summary available."}</p>
-      </div>
-
-      <div style={sectionCardStyle}>
-        <h3 style={sectionTitleStyle}>AI Analysis</h3>
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
-            gap: "12px",
-            marginBottom: "14px",
-          }}
-        >
-          <div>
-            <p style={{ ...textStyle, fontWeight: 700 }}>Intent</p>
-            <p style={textStyle}>{getIntentLabel(item.result.analysis.intent)}</p>
-          </div>
-          <div>
-            <p style={{ ...textStyle, fontWeight: 700 }}>Urgency</p>
-            <p style={textStyle}>{item.result.analysis.urgency}</p>
-          </div>
-          <div>
-            <p style={{ ...textStyle, fontWeight: 700 }}>Order Number</p>
-            <p style={textStyle}>{item.result.analysis.orderNumber ?? "Not provided"}</p>
-          </div>
-          <div>
-            <p style={{ ...textStyle, fontWeight: 700 }}>Actionability</p>
-            <p style={textStyle}>
-              {getActionabilityLabel(item.result.analysis.actionability)}
-            </p>
-          </div>
-          <div>
-            <p style={{ ...textStyle, fontWeight: 700 }}>Reply</p>
-            <p style={textStyle}>{getReplyNeededLabel(item.result.analysis.replyNeeded)}</p>
-          </div>
-          {item.result.analysis.workType && (
-            <div>
-              <p style={{ ...textStyle, fontWeight: 700 }}>Work Type</p>
-              <p style={textStyle}>{getWorkTypeLabel(item.result.analysis.workType)}</p>
-            </div>
-          )}
-        </div>
-
-        <h4 style={{ ...sectionTitleStyle, fontSize: "14px" }}>Issues</h4>
-        {item.result.analysis.risks.length > 0 ? (
-          <ul style={{ margin: 0, paddingLeft: "20px", color: "#334155" }}>
-            {item.result.analysis.risks.map((risk) => (
-              <li key={risk} style={{ marginBottom: "8px", lineHeight: 1.6 }}>
-                {getRiskLabel(risk)}
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p style={textStyle}>No significant issues identified.</p>
-        )}
-      </div>
-
-      <div style={sectionCardStyle}>
-        <h3 style={sectionTitleStyle}>Recommended Action</h3>
-        <div style={actionCalloutStyle}>
-          <p style={{ ...textStyle, color: "#0f172a", fontWeight: 600 }}>
-            {item.result.analysis.nextAction || "Review the message and determine the next support step."}
-          </p>
-        </div>
-      </div>
-
-      <div style={sectionCardStyle}>
-        <h3 style={sectionTitleStyle}>Priority Debug</h3>
-        <p style={{ ...textStyle, marginBottom: "10px", color: "#64748b", fontSize: "12px" }}>
-          Internal scoring info for triage tuning.
-        </p>
-        <p style={textStyle}>
-          <strong>Priority:</strong> {getPriorityLabel(item.result.priorityScore)}
-        </p>
-        <p style={{ ...textStyle, marginBottom: "10px" }}>
-          <strong>Score:</strong> {item.result.priorityScore}
-        </p>
-        {item.result.priorityBreakdown && item.result.priorityBreakdown.length > 0 ? (
-          <ul style={{ margin: 0, paddingLeft: "20px", color: "#334155" }}>
-            {item.result.priorityBreakdown.map((entry, index) => (
-              <li key={`${entry.label}-${index}`} style={{ marginBottom: "8px", lineHeight: 1.6 }}>
-                {formatPriorityBreakdownLabel(entry.label)} (+{entry.points})
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p style={textStyle}>No priority breakdown available.</p>
-        )}
-      </div>
-
-      {item.result.orderContext && (
-        <div style={sectionCardStyle}>
-          <h3 style={sectionTitleStyle}>Order Context</h3>
-          <p style={textStyle}>
-            <strong>Order Number:</strong> {item.result.orderContext.orderNumber}
-          </p>
-          <p style={textStyle}>
-            <strong>Status:</strong> {item.result.orderContext.status}
-          </p>
-          <p style={textStyle}>
-            <strong>Shipment Status:</strong> {item.result.orderContext.shipmentStatus}
-          </p>
-          <p style={textStyle}>
-            <strong>Last Updated:</strong> {item.result.orderContext.lastUpdated}
-          </p>
-        </div>
-      )}
-
-      {!item.result.orderContext && pilotMode && item.result.analysis.orderNumber && (
-        <div style={sectionCardStyle}>
-          <h3 style={sectionTitleStyle}>Order Context</h3>
-          <p style={textStyle}>
-            {orderDataMessage ?? "Order data not connected yet. Verify in WMS."}
-          </p>
-        </div>
-      )}
-
-      {pilotMode && (
-        <div style={sectionCardStyle}>
-          <h3 style={sectionTitleStyle}>Queue Actions</h3>
-          <div style={{ ...replyActionsStyle, marginBottom: "12px" }}>
-            {pilotItemView !== "active" && (
-              <button
-                type="button"
-                onClick={onMarkPilotItemActive}
-                style={secondaryButtonStyle}
-              >
-                Back to Active
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={onRecomputePriority}
-              style={secondaryButtonStyle}
-            >
-              Recompute Priority
-            </button>
-            <button
-              type="button"
-              onClick={onMarkPilotItemDone}
-              style={{
-                ...secondaryButtonStyle,
-                backgroundColor: pilotItemView === "done" ? "#dcfce7" : "#ffffff",
-                color: pilotItemView === "done" ? "#166534" : "#0f172a",
-              }}
-            >
-              Done
-            </button>
-            <button
-              type="button"
-              onClick={onMarkPilotItemNotRelevant}
-              style={{
-                ...secondaryButtonStyle,
-                backgroundColor: pilotItemView === "not_relevant" ? "#e2e8f0" : "#ffffff",
-                color: pilotItemView === "not_relevant" ? "#475569" : "#0f172a",
-              }}
-            >
-              Not Relevant
-            </button>
-            <button
-              type="button"
-              onClick={onSnoozePilotItemUntilTomorrow}
-              style={{
-                ...secondaryButtonStyle,
-                backgroundColor: pilotItemView === "snoozed" ? "#dbeafe" : "#ffffff",
-                color: pilotItemView === "snoozed" ? "#1d4ed8" : "#0f172a",
-              }}
-            >
-              Snooze to Tomorrow
-            </button>
-            <button
-              type="button"
-              onClick={onMarkPilotItemWaitingOnCustomer}
-              style={{
-                ...secondaryButtonStyle,
-                backgroundColor: pilotItemView === "waiting_on_customer" ? "#fef3c7" : "#ffffff",
-                color: pilotItemView === "waiting_on_customer" ? "#92400e" : "#0f172a",
-              }}
-            >
-              Waiting on Customer
-            </button>
-          </div>
-          <p style={{ ...textStyle, fontSize: "12px", color: "#64748b" }}>
-            Current state:{" "}
-            {pilotItemView === "waiting_on_customer"
-              ? "Waiting on Customer"
-              : pilotItemView === "not_relevant"
-                ? "Not Relevant"
-                : pilotItemView === "snoozed"
-                  ? "Snoozed"
-                  : pilotItemView === "done"
-                    ? "Done"
-                    : "Active"}
-          </p>
-        </div>
-      )}
-
-      <div style={sectionCardStyle}>
+      <div style={{ display: "grid", gap: "16px" }}>
         <div
           style={{
             display: "flex",
             justifyContent: "space-between",
-            alignItems: "center",
             gap: "12px",
-            marginBottom: "8px",
+            alignItems: "start",
             flexWrap: "wrap",
           }}
         >
-          <h3 style={{ ...sectionTitleStyle, margin: 0 }}>Reply Draft</h3>
-          <div style={replyActionsStyle}>
-            <button
-              type="button"
-              onClick={() => {
-                if (!canOpenOutlook) {
-                  return;
-                }
-
-                window.open(buildOutlookSearchUrl(item), "_blank");
-              }}
-              disabled={!canOpenOutlook}
-              style={{
-                ...secondaryButtonStyle,
-                backgroundColor: canOpenOutlook ? "#ffffff" : "#e2e8f0",
-                color: canOpenOutlook ? "#0f172a" : "#64748b",
-                cursor: canOpenOutlook ? "pointer" : "not-allowed",
-              }}
-            >
-              Open in Outlook
-            </button>
-            <button
-              type="button"
-              onClick={onCopyCaseForReview}
-              style={{
-                ...secondaryButtonStyle,
-                backgroundColor:
-                  caseCopyFeedback === "success"
-                    ? "#dcfce7"
-                    : caseCopyFeedback === "error"
-                      ? "#fee2e2"
-                      : "#ffffff",
-                color:
-                  caseCopyFeedback === "success"
-                    ? "#166534"
-                    : caseCopyFeedback === "error"
-                      ? "#991b1b"
-                      : "#0f172a",
-              }}
-            >
-              {caseCopyFeedback === "success"
-                ? "Case Copied!"
-                : caseCopyFeedback === "error"
-                  ? "Copy Failed"
-                  : "Copy Case for Review"}
-            </button>
-            <button
-              type="button"
-              onClick={onCopyRawCaseJson}
-              style={{
-                ...secondaryButtonStyle,
-                backgroundColor:
-                  rawCaseCopyFeedback === "success"
-                    ? "#dcfce7"
-                    : rawCaseCopyFeedback === "error"
-                      ? "#fee2e2"
-                      : "#ffffff",
-                color:
-                  rawCaseCopyFeedback === "success"
-                    ? "#166534"
-                    : rawCaseCopyFeedback === "error"
-                      ? "#991b1b"
-                      : "#0f172a",
-              }}
-            >
-              {rawCaseCopyFeedback === "success"
-                ? "JSON Copied!"
-                : rawCaseCopyFeedback === "error"
-                  ? "Copy Failed"
-                  : "Copy Raw Case JSON"}
-            </button>
-            <button
-              type="button"
-              onClick={onRegenerateReply}
-              disabled={regeneratingReply}
-              style={{
-                ...secondaryButtonStyle,
-                backgroundColor: regeneratingReply ? "#e2e8f0" : "#ffffff",
-                color: regeneratingReply ? "#64748b" : "#0f172a",
-                cursor: regeneratingReply ? "not-allowed" : "pointer",
-              }}
-            >
-              {regeneratingReply ? "Regenerating..." : "Regenerate Reply"}
-            </button>
-            <button
-              type="button"
-              onClick={onCopyReply}
-              disabled={!hasReplyDraft}
-              style={{
-                ...secondaryButtonStyle,
-                backgroundColor: !hasReplyDraft
-                  ? "#e2e8f0"
-                  : copyFeedback === "success"
-                    ? "#dcfce7"
-                    : copyFeedback === "error"
-                      ? "#fee2e2"
-                      : "#ffffff",
-                color: !hasReplyDraft
-                  ? "#64748b"
-                  : copyFeedback === "success"
-                    ? "#166534"
-                    : copyFeedback === "error"
-                      ? "#991b1b"
-                      : "#0f172a",
-                cursor: !hasReplyDraft ? "not-allowed" : "pointer",
-              }}
-            >
-              {!hasReplyDraft
-                ? "No Reply Draft"
-                : copyFeedback === "success"
-                  ? "Copied!"
-                  : copyFeedback === "error"
-                    ? "Clipboard Unavailable"
-                    : "Copy Reply"}
-            </button>
-          </div>
+          <QueueNavigationControls
+            currentPosition={navigation?.currentPosition}
+            total={navigation?.total ?? 0}
+            hasPrevious={navigation?.hasPrevious ?? false}
+            hasNext={navigation?.hasNext ?? false}
+            onPrevious={navigation?.onPrevious ?? (() => undefined)}
+            onNext={navigation?.onNext ?? (() => undefined)}
+            onBackToQueue={showBackButton ? onBackToQueue : undefined}
+          />
+          <button
+            type="button"
+            onClick={() => setShowContextPanel((current) => !current)}
+            style={secondaryButtonStyle}
+          >
+            {showContextPanel ? "Hide Context" : "Show Context"}
+          </button>
         </div>
-        {item.result.replyDraft && (
+
+        <header style={{ display: "grid", gap: "12px" }}>
+          <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", alignItems: "center" }}>
+            <span style={eyebrowStyle}>Conversation Workspace</span>
+            <StatusPill status={thread.status} />
+            <span
+              style={{
+                fontSize: "12px",
+                fontWeight: 700,
+                color: "#334155",
+                backgroundColor: "#e2e8f0",
+                borderRadius: "999px",
+                padding: "4px 8px",
+              }}
+            >
+              {queueAge.label}
+            </span>
+            <span
+              style={{
+                fontSize: "12px",
+                fontWeight: 700,
+                color: "#334155",
+                backgroundColor: "#e2e8f0",
+                borderRadius: "999px",
+                padding: "4px 8px",
+              }}
+            >
+              {thread.itemCount} {thread.itemCount === 1 ? "email" : "emails"}
+            </span>
+            {item.customerMatch && (
+              <span
+                style={{
+                  fontSize: "12px",
+                  fontWeight: 700,
+                  color: "#0f766e",
+                  backgroundColor: "#ccfbf1",
+                  borderRadius: "999px",
+                  padding: "4px 8px",
+                }}
+              >
+                Matched via {getCustomerMatchSourceLabel(item.customerMatch.matchedOn)}
+              </span>
+            )}
+          </div>
+
+          <div style={{ display: "grid", gap: "8px" }}>
+            <h2 style={titleStyle}>{item.email.subject}</h2>
+            <p style={subtitleStyle}>
+              {item.email.senderName} ({item.email.senderEmail}) | Received{" "}
+              {formatReceivedTime(item.email.receivedAt)}
+            </p>
+            {isOutlookEmailSource(item.email.source) && (
+              <span style={sourceBadgeStyle}>Imported from Outlook</span>
+            )}
+          </div>
+        </header>
+
+        {presenceCopy && (
           <div
             style={{
-              marginBottom: "12px",
-              border: "1px solid #e2e8f0",
-              borderRadius: "12px",
-              backgroundColor: "#f8fafc",
+              border: `1px solid ${
+                presence?.presenceType === "working" ? "#f59e0b" : "#93c5fd"
+              }`,
+              backgroundColor:
+                presence?.presenceType === "working" ? "#fff7ed" : "#eff6ff",
+              borderRadius: "14px",
               padding: "12px 14px",
             }}
           >
-            <p style={{ ...textStyle, fontSize: "12px", fontWeight: 700, color: "#64748b" }}>
-              Why this draft?
-            </p>
-            <p style={{ ...textStyle, marginTop: "4px" }}>
-              <strong>{getIssueTypeLabel(draftIssueType)}:</strong>{" "}
-              {getIssueTypeDraftExplanation(draftIssueType)}
-            </p>
-          </div>
-        )}
-        {item.result.replyDraft ? (
-          <pre style={bodyBlockStyle}>{item.result.replyDraft}</pre>
-        ) : (
-          <div
-            style={{
-              ...bodyBlockStyle,
-              fontStyle: "italic",
-              color: "#475569",
-            }}
-          >
-            {item.result.analysis.replyNeeded === "no"
-              ? "Reply not recommended for this message."
-              : "No draft reply available."}
-          </div>
-        )}
-        {copyFeedback === "error" && (
-          <p style={{ ...textStyle, marginTop: "10px" }}>
-            Clipboard access is not available in this browser context. Copy the draft manually.
-          </p>
-        )}
-        {replyActionError && (
-          <p style={{ ...textStyle, marginTop: "10px", color: "#991b1b" }}>
-            {replyActionError}
-          </p>
-        )}
-      </div>
-
-      {pilotMode && (
-        <div style={sectionCardStyle}>
-          <h3 style={sectionTitleStyle}>Was this helpful?</h3>
-          <div style={replyActionsStyle}>
-            <button
-              type="button"
-              onClick={() => onSetPilotUsefulness("helpful")}
+            <p
               style={{
-                ...secondaryButtonStyle,
-                backgroundColor: pilotItemState?.usefulness === "helpful" ? "#dcfce7" : "#ffffff",
-                color: pilotItemState?.usefulness === "helpful" ? "#166534" : "#0f172a",
+                margin: 0,
+                fontSize: "14px",
+                fontWeight: 700,
+                color: presence?.presenceType === "working" ? "#92400e" : "#1d4ed8",
               }}
             >
-              Helpful
-            </button>
-            <button
-              type="button"
-              onClick={() => onSetPilotUsefulness("not_helpful")}
-              style={{
-                ...secondaryButtonStyle,
-                backgroundColor: pilotItemState?.usefulness === "not_helpful" ? "#fee2e2" : "#ffffff",
-                color: pilotItemState?.usefulness === "not_helpful" ? "#991b1b" : "#0f172a",
-              }}
-            >
-              Not Helpful
-            </button>
+              {presenceCopy}
+            </p>
           </div>
-        </div>
-      )}
+        )}
 
-      {item.result.warning && !(pilotMode && item.result.analysis.orderNumber && !item.result.orderContext) && (
+        <DetailActionBar
+          thread={thread}
+          currentRep={currentRep}
+          macros={macros}
+          currentRepAvailable={Boolean(currentRep)}
+          hasExactOutlookLink={hasExactOutlookLink}
+          outlookStatusMessage={outlookStatusMessage}
+          canTakeThread={canTakeThread}
+          takeThreadReason={takeThreadReason}
+          onTakeThreadReasonChange={setTakeThreadReason}
+          onOpenInOutlook={() => {
+            const outlookTarget = getOutlookOpenTarget(item);
+
+            if (outlookTarget.type === "missing_exact_link") {
+              setOutlookStatusMessage(outlookTarget.message);
+              return;
+            }
+
+            setOutlookStatusMessage(null);
+            window.open(outlookTarget.url, "_blank", "noopener,noreferrer");
+          }}
+          onThreadStatusChange={(status) => onThreadStatusChange(thread.id, status)}
+          onApplyMacro={(macroId) => onApplyMacro(thread.id, macroId)}
+          onLogReply={() => onLogReply(thread.id)}
+          onJumpToNotes={jumpToNotes}
+          onSnooze={(mode, customValue) => onSnoozeThread(thread.id, mode, customValue)}
+          onUnsnooze={() => onUnsnoozeThread(thread.id)}
+          onTakeThread={(reason) => onTakeThread(thread.id, reason)}
+        />
+
         <div
           style={{
-            border: "1px solid #f59e0b",
-            backgroundColor: "#fff7e6",
-            borderRadius: "12px",
-            padding: "14px 16px",
-            marginBottom: "20px",
+            display: "grid",
+            gap: "16px",
+            gridTemplateColumns:
+              showContextPanel && !isCompactWorkspace
+                ? "minmax(0, 1fr) minmax(260px, 300px)"
+                : "minmax(0, 1fr)",
+            alignItems: "start",
           }}
         >
-          <h3 style={sectionTitleStyle}>Warning</h3>
-          <p style={textStyle}>{item.result.warning}</p>
+          <div style={{ display: "grid", gap: "16px" }}>
+            <ThreadConversationView
+              item={item}
+              thread={thread}
+              pilotMode={pilotMode}
+              orderDataMessage={orderDataMessage}
+              hasReplyDraft={hasReplyDraft}
+              copyFeedback={copyFeedback}
+              caseCopyFeedback={caseCopyFeedback}
+              rawCaseCopyFeedback={rawCaseCopyFeedback}
+              regeneratingReply={regeneratingReply}
+              replyActionError={replyActionError}
+              notesOpen={notesOpen}
+              replyHistoryOpen={replyHistoryOpen}
+              olderMessagesOpen={olderMessagesOpen}
+              notesComposerRef={notesComposerRef}
+              notesSectionRef={notesSectionRef}
+              replyHistorySectionRef={replyHistorySectionRef}
+              olderMessagesSectionRef={olderMessagesSectionRef}
+              onNotesOpenChange={setNotesOpen}
+              onReplyHistoryOpenChange={setReplyHistoryOpen}
+              onOlderMessagesOpenChange={setOlderMessagesOpen}
+              onCopyReply={onCopyReply}
+              onCopyCaseForReview={onCopyCaseForReview}
+              onCopyRawCaseJson={onCopyRawCaseJson}
+              showDebugActions={showDebugActions}
+              onRegenerateReply={onRegenerateReply}
+              onAddInternalNote={(body) => onAddInternalNote(thread.id, body)}
+            />
+          </div>
+
+          {showContextPanel && (
+            <ContextPanel
+              item={item}
+              thread={thread}
+              reps={reps}
+              currentRep={currentRep}
+              pilotMode={pilotMode}
+              pilotItemState={pilotItemState}
+              orderDataMessage={orderDataMessage}
+              canTakeThread={canTakeThread}
+              takeThreadReason={takeThreadReason}
+              onTakeThreadReasonChange={setTakeThreadReason}
+              onTakeThread={(reason) => onTakeThread(thread.id, reason)}
+              onRecomputePriority={onRecomputePriority}
+              onMarkPilotItemActive={onMarkPilotItemActive}
+              onMarkPilotItemDone={onMarkPilotItemDone}
+              onMarkPilotItemNotRelevant={onMarkPilotItemNotRelevant}
+              onMarkPilotItemWaitingOnCustomer={onMarkPilotItemWaitingOnCustomer}
+              onSnoozePilotItemUntilTomorrow={onSnoozePilotItemUntilTomorrow}
+              onSetPilotUsefulness={onSetPilotUsefulness}
+            />
+          )}
         </div>
-      )}
+      </div>
     </div>
   );
 }
+
+const panelStyle: React.CSSProperties = {
+  backgroundColor: "#ffffff",
+  border: "1px solid #d8e1ec",
+  borderRadius: "18px",
+  boxShadow: "0 12px 30px rgba(15, 23, 42, 0.06)",
+  minHeight: "100%",
+  padding: "20px",
+  boxSizing: "border-box",
+};
+
+const titleStyle: React.CSSProperties = {
+  margin: 0,
+  fontSize: "28px",
+  fontWeight: 700,
+  color: "#0f172a",
+};
+
+const subtitleStyle: React.CSSProperties = {
+  margin: 0,
+  fontSize: "14px",
+  color: "#475569",
+  lineHeight: 1.6,
+};
+
+const eyebrowStyle: React.CSSProperties = {
+  fontSize: "11px",
+  fontWeight: 700,
+  color: "#64748b",
+  textTransform: "uppercase",
+  letterSpacing: "0.04em",
+};
+
+const sourceBadgeStyle: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  width: "fit-content",
+  fontSize: "12px",
+  fontWeight: 700,
+  color: "#0f766e",
+  backgroundColor: "#ccfbf1",
+  borderRadius: "999px",
+  padding: "4px 8px",
+};
+
+const secondaryButtonStyle: React.CSSProperties = {
+  border: "1px solid #cbd5e1",
+  backgroundColor: "#ffffff",
+  color: "#0f172a",
+  borderRadius: "10px",
+  padding: "8px 12px",
+  fontSize: "13px",
+  fontWeight: 700,
+  cursor: "pointer",
+};
+
+const bodyBlockStyle: React.CSSProperties = {
+  margin: 0,
+  padding: "16px",
+  borderRadius: "12px",
+  border: "1px solid #dbe4ee",
+  backgroundColor: "#f8fafc",
+  whiteSpace: "pre-wrap",
+  fontSize: "13px",
+  lineHeight: 1.7,
+  color: "#334155",
+  fontFamily: "inherit",
+};

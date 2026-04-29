@@ -17,7 +17,15 @@ export function filterInboxEmailsForPilotMode<T>(
 
   return items.filter((item) => {
     const source = (item as { source?: string } | null)?.source;
+    const provider = (item as { provider?: string } | null)?.provider;
 
-    return source === "outlook_import" || source === "outlook_graph";
+    return (
+      source === "outlook_import" ||
+      source === "outlook_graph" ||
+      source === "test_data" ||
+      provider === "outlook_addin_import" ||
+      provider === "outlook_graph" ||
+      provider === "test_data"
+    );
   });
 }

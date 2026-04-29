@@ -1,9 +1,15 @@
+import { GroupedRepQueue } from "./GroupedRepQueue";
+import { ThreadedQueueCard } from "./ThreadedQueueCard";
 import { getIntentLabel } from "../services/analysisTaxonomy";
-import { getWorkTypeLabel } from "../services/customerServiceMail";
-import { buildOutlookSearchUrl, canOpenInOutlook } from "../services/openInOutlook";
-import { getPilotQueueItemState, getPilotQueueViewForItem, type PilotQueueStateMap } from "../services/pilotQueueState";
-import { getQueueAgeInfo } from "../services/queueAging";
-import type { IntentCode, PilotQueueView, ProcessedEmail } from "../types/actionDesk";
+import type { CustomerPriorityFilter } from "../app/processEmails";
+import type { RepGroupedQueueSection } from "../services/workflowSelectors";
+import type {
+  AssignmentReason,
+  IntentCode,
+  PilotQueueView,
+  QueueDisplayMode,
+  WorkflowThread,
+} from "../types/actionDesk";
 
 type IssueFilterCode =
   | "delivered_not_received"
@@ -12,7 +18,8 @@ type IssueFilterCode =
   | "general_issue";
 
 type InboxQueueProps = {
-  items: ProcessedEmail[];
+  threads: WorkflowThread[];
+  groupedRepSections?: RepGroupedQueueSection[];
   totalCount: number;
   summary: {
     totalLoaded: number;
@@ -31,7 +38,7 @@ type InboxQueueProps = {
   pilotMode: boolean;
   pilotEmptyStateMessage?: string;
   pilotQueueView: PilotQueueView;
-  pilotItemStates: PilotQueueStateMap;
+  queueDisplayMode: QueueDisplayMode;
   queueView: "customer_service" | "all_inbox";
   showProblemsOnly: boolean;
   isLoadingInbox: boolean;
@@ -42,11 +49,16 @@ type InboxQueueProps = {
   searchQuery: string;
   urgencyFilter: "all" | "high" | "medium" | "low";
   intentFilter: IntentCode | "all";
+  customerPriorityFilter: CustomerPriorityFilter;
+  hasSavedCustomers: boolean;
   intentOptions: IntentCode[];
+  now: Date;
+  currentRepId?: string;
   onRefreshInbox: () => void;
   onLoadMore: () => void;
   retryingEmailId?: string;
   onRetryEmail: (emailId: string) => void;
+  onTakeThread: (threadId: string, reason: AssignmentReason) => void;
   onToggleProblemsOnly: () => void;
   onIssueFilterChange: (issueCode: IssueFilterCode) => void;
   onClearIssueFilter: () => void;
@@ -56,103 +68,8 @@ type InboxQueueProps = {
   onSearchQueryChange: (value: string) => void;
   onUrgencyFilterChange: (value: "all" | "high" | "medium" | "low") => void;
   onIntentFilterChange: (value: IntentCode | "all") => void;
+  onCustomerPriorityFilterChange: (value: CustomerPriorityFilter) => void;
 };
-
-function formatReceivedTime(receivedAt: string) {
-  return new Date(receivedAt).toLocaleString([], {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
-}
-
-function getUrgencyBadgeStyle(
-  urgency: NonNullable<ProcessedEmail["result"]>["analysis"]["urgency"],
-): React.CSSProperties {
-  return {
-    fontSize: "12px",
-    fontWeight: 700,
-    color:
-      urgency === "high" ? "#991b1b" : urgency === "low" ? "#166534" : "#92400e",
-    backgroundColor:
-      urgency === "high" ? "#fee2e2" : urgency === "low" ? "#dcfce7" : "#fef3c7",
-    borderRadius: "999px",
-    padding: "4px 8px",
-    textTransform: "capitalize",
-  };
-}
-
-function getPriorityLevel(priorityScore: number): "High" | "Medium" | "Low" {
-  if (priorityScore >= 70) {
-    return "High";
-  }
-
-  if (priorityScore >= 40) {
-    return "Medium";
-  }
-
-  return "Low";
-}
-
-function getPriorityBadgeStyle(priorityScore: number): React.CSSProperties {
-  const level = getPriorityLevel(priorityScore);
-
-  return {
-    fontSize: "12px",
-    fontWeight: 700,
-    color:
-      level === "High" ? "#991b1b" : level === "Medium" ? "#92400e" : "#166534",
-    backgroundColor:
-      level === "High" ? "#fee2e2" : level === "Medium" ? "#fef3c7" : "#dcfce7",
-    borderRadius: "999px",
-    padding: "4px 8px",
-  };
-}
-
-function getAgeBadgeStyle(label: string): React.CSSProperties {
-  if (label.startsWith("Overdue")) {
-    return {
-      fontSize: "12px",
-      fontWeight: 700,
-      color: "#991b1b",
-      backgroundColor: "#fee2e2",
-      borderRadius: "999px",
-      padding: "4px 8px",
-    };
-  }
-
-  if (label.startsWith("Stale")) {
-    return {
-      fontSize: "12px",
-      fontWeight: 700,
-      color: "#9a3412",
-      backgroundColor: "#ffedd5",
-      borderRadius: "999px",
-      padding: "4px 8px",
-    };
-  }
-
-  if (label.startsWith("Aging") || label.startsWith("Waiting")) {
-    return {
-      fontSize: "12px",
-      fontWeight: 700,
-      color: "#92400e",
-      backgroundColor: "#fef3c7",
-      borderRadius: "999px",
-      padding: "4px 8px",
-    };
-  }
-
-  return {
-    fontSize: "12px",
-    fontWeight: 700,
-    color: "#166534",
-    backgroundColor: "#dcfce7",
-    borderRadius: "999px",
-    padding: "4px 8px",
-  };
-}
 
 function getPilotQueueViewLabel(view: PilotQueueView): string {
   switch (view) {
@@ -171,95 +88,9 @@ function getPilotQueueViewLabel(view: PilotQueueView): string {
   }
 }
 
-function getActionabilityBadge(
-  actionability?: ProcessedEmail["result"] extends infer Result
-    ? Result extends { analysis: infer Analysis }
-      ? Analysis extends { actionability?: infer Value }
-        ? Value
-        : never
-      : never
-    : never,
-): { label: string; style: React.CSSProperties } | null {
-  if (actionability === "awareness_only") {
-    return {
-      label: "Awareness Only",
-      style: {
-        fontSize: "12px",
-        fontWeight: 700,
-        color: "#475569",
-        backgroundColor: "#e2e8f0",
-        borderRadius: "999px",
-        padding: "4px 8px",
-      },
-    };
-  }
-
-  if (actionability === "no_action_needed") {
-    return {
-      label: "No Action Needed",
-      style: {
-        fontSize: "12px",
-        fontWeight: 700,
-        color: "#166534",
-        backgroundColor: "#dcfce7",
-        borderRadius: "999px",
-        padding: "4px 8px",
-      },
-    };
-  }
-
-  return null;
-}
-
-function getRowSurfaceStyle(options: {
-  isSelected: boolean;
-  isFailed: boolean;
-  isPending: boolean;
-  isHighPriority: boolean;
-}): React.CSSProperties {
-  const { isSelected, isFailed, isPending, isHighPriority } = options;
-
-  if (isSelected) {
-    return {
-      borderLeft: "4px solid #2563eb",
-      backgroundColor: "#eff6ff",
-      boxShadow: "inset 0 0 0 1px rgba(37, 99, 235, 0.12)",
-    };
-  }
-
-  if (isFailed) {
-    return {
-      borderLeft: "4px solid #dc2626",
-      backgroundColor: "#fff4f4",
-      boxShadow: "inset 0 0 0 1px rgba(220, 38, 38, 0.1)",
-    };
-  }
-
-  if (isHighPriority) {
-    return {
-      borderLeft: "4px solid #dc2626",
-      backgroundColor: "#fff8f6",
-      boxShadow: "inset 0 0 0 1px rgba(220, 38, 38, 0.06)",
-    };
-  }
-
-  if (isPending) {
-    return {
-      borderLeft: "4px solid #f59e0b",
-      backgroundColor: "#fffdf5",
-      boxShadow: "inset 0 0 0 1px rgba(245, 158, 11, 0.08)",
-    };
-  }
-
-  return {
-    borderLeft: "4px solid transparent",
-    backgroundColor: "#ffffff",
-    boxShadow: "none",
-  };
-}
-
 export function InboxQueue({
-  items,
+  threads,
+  groupedRepSections = [],
   totalCount,
   summary,
   topIssues,
@@ -269,7 +100,7 @@ export function InboxQueue({
   pilotMode,
   pilotEmptyStateMessage,
   pilotQueueView,
-  pilotItemStates,
+  queueDisplayMode,
   queueView,
   showProblemsOnly,
   isLoadingInbox,
@@ -280,11 +111,16 @@ export function InboxQueue({
   searchQuery,
   urgencyFilter,
   intentFilter,
+  customerPriorityFilter,
+  hasSavedCustomers,
   intentOptions,
+  now,
+  currentRepId,
   onRefreshInbox,
   onLoadMore,
   retryingEmailId,
   onRetryEmail,
+  onTakeThread,
   onToggleProblemsOnly,
   onIssueFilterChange,
   onClearIssueFilter,
@@ -294,16 +130,13 @@ export function InboxQueue({
   onSearchQueryChange,
   onUrgencyFilterChange,
   onIntentFilterChange,
+  onCustomerPriorityFilterChange,
 }: InboxQueueProps) {
-  function isOutlookEmailSource(source?: ProcessedEmail["email"]["source"]) {
-    return source === "outlook_import" || source === "outlook_graph";
-  }
-
   const containerStyle: React.CSSProperties = {
     backgroundColor: "#ffffff",
     border: "1px solid #d8e1ec",
-    borderRadius: "16px",
-    boxShadow: "0 10px 30px rgba(15, 23, 42, 0.06)",
+    borderRadius: "18px",
+    boxShadow: "0 12px 30px rgba(15, 23, 42, 0.06)",
     overflow: "hidden",
   };
 
@@ -315,7 +148,7 @@ export function InboxQueue({
 
   const titleStyle: React.CSSProperties = {
     margin: 0,
-    fontSize: "18px",
+    fontSize: "19px",
     fontWeight: 700,
     color: "#0f172a",
   };
@@ -382,14 +215,8 @@ export function InboxQueue({
 
   const filterRowStyle: React.CSSProperties = {
     display: "grid",
-    gridTemplateColumns: pilotMode
-      ? "repeat(3, minmax(0, 1fr))"
-      : "repeat(2, minmax(0, 1fr))",
+    gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
     gap: "10px",
-  };
-
-  const listStyle: React.CSSProperties = {
-    display: "grid",
   };
 
   const topIssuesPanelStyle: React.CSSProperties = {
@@ -421,7 +248,7 @@ export function InboxQueue({
 
   const summaryBarStyle: React.CSSProperties = {
     display: "grid",
-    gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+    gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))",
     gap: "8px",
     padding: "12px 20px",
     borderBottom: "1px solid #e5edf5",
@@ -464,36 +291,16 @@ export function InboxQueue({
     backgroundColor: "#fcfdff",
   };
 
-  const sourceBadgeStyle: React.CSSProperties = {
-    fontSize: "12px",
-    fontWeight: 700,
-    color: "#0f766e",
-    backgroundColor: "#ccfbf1",
-    borderRadius: "999px",
-    padding: "4px 8px",
-  };
-
-  const inlineActionButtonStyle: React.CSSProperties = {
-    border: "1px solid #cbd5e1",
-    backgroundColor: "#ffffff",
-    color: "#0f172a",
-    borderRadius: "8px",
-    padding: "4px 8px",
-    fontSize: "12px",
-    fontWeight: 700,
-    cursor: "pointer",
-  };
-
   return (
     <div style={containerStyle}>
       <div style={headerStyle}>
         <div style={headerRowStyle}>
           <div>
             <h2 style={titleStyle}>
-              {queueView === "customer_service" ? "Customer Service Queue" : "All Inbox"}
+              {queueView === "customer_service" ? "Queue Quick List" : "Inbox Quick List"}
             </h2>
             <p style={subtitleStyle}>
-              Showing {items.length} of {totalCount} emails
+              Showing {threads.length} of {totalCount} threads
               {lastLoadedAt ? ` | Last loaded ${lastLoadedAt}` : ""}
             </p>
           </div>
@@ -606,6 +413,18 @@ export function InboxQueue({
                 </option>
               ))}
             </select>
+            <select
+              value={customerPriorityFilter}
+              onChange={(event) =>
+                onCustomerPriorityFilterChange(
+                  event.target.value as CustomerPriorityFilter,
+                )
+              }
+              style={inputStyle}
+            >
+              <option value="all">All emails</option>
+              <option value="matched_only">Matched customers only</option>
+            </select>
             {pilotMode && (
               <select
                 value={pilotQueueView}
@@ -625,457 +444,145 @@ export function InboxQueue({
         </div>
       </div>
 
-      <div style={listStyle}>
-        <div style={topIssuesPanelStyle}>
-          <div style={{ display: "flex", justifyContent: "space-between", gap: "12px", alignItems: "center", flexWrap: "wrap" }}>
-            <p style={{ ...summaryLabelStyle, fontSize: "12px" }}>Top Issues</p>
-            <button
-              type="button"
-              onClick={onClearIssueFilter}
-              disabled={activeIssueFilter === null}
-              style={{
-                border: "none",
-                background: "transparent",
-                color: activeIssueFilter ? "#1d4ed8" : "#94a3b8",
-                fontSize: "12px",
-                fontWeight: 700,
-                cursor: activeIssueFilter ? "pointer" : "default",
-                padding: 0,
-              }}
-            >
-              All Issues
-            </button>
-          </div>
-          {topIssues.length > 0 ? (
-            <div style={topIssuesRowStyle}>
-              {topIssues.map((issue) => (
-                <button
-                  key={issue.code}
-                  type="button"
-                  onClick={() => onIssueFilterChange(issue.code)}
-                  aria-pressed={activeIssueFilter === issue.code}
-                  style={{
-                    ...topIssueBadgeStyle,
-                    backgroundColor: activeIssueFilter === issue.code ? "#dbeafe" : "#ffffff",
-                    borderColor: activeIssueFilter === issue.code ? "#93c5fd" : "#dbe5f0",
-                    color: activeIssueFilter === issue.code ? "#1d4ed8" : "#334155",
-                  }}
-                >
-                  {issue.label}
-                  <span style={{ color: "#64748b" }}>
-                    ({issue.count} {issue.count === 1 ? "email" : "emails"})
-                  </span>
-                </button>
-              ))}
-            </div>
-          ) : (
-            <p style={{ ...subtitleStyle, marginTop: "8px" }}>No urgent issues right now.</p>
-          )}
+      <div style={topIssuesPanelStyle}>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: "12px", alignItems: "center", flexWrap: "wrap" }}>
+          <p style={{ ...summaryLabelStyle, fontSize: "12px" }}>Quick Filters</p>
+          <button
+            type="button"
+            onClick={onClearIssueFilter}
+            disabled={activeIssueFilter === null}
+            style={{
+              border: "none",
+              background: "transparent",
+              color: activeIssueFilter ? "#1d4ed8" : "#94a3b8",
+              fontSize: "12px",
+              fontWeight: 700,
+              cursor: activeIssueFilter ? "pointer" : "default",
+              padding: 0,
+            }}
+          >
+            All Issues
+          </button>
         </div>
-
-        <div style={summaryBarStyle}>
-          <div style={summaryCardStyle}>
-            <p style={summaryLabelStyle}>Total Loaded</p>
-            <p style={summaryValueStyle}>{summary.totalLoaded}</p>
-          </div>
-          <div
-            style={{
-              ...summaryCardStyle,
-              backgroundColor: summary.highPriority > 0 ? "#fff7f7" : "#ffffff",
-              borderColor: summary.highPriority > 0 ? "#fecaca" : "#e2e8f0",
-            }}
-          >
-            <p style={summaryLabelStyle}>High Priority</p>
-            <p style={{ ...summaryValueStyle, color: "#991b1b" }}>{summary.highPriority}</p>
-          </div>
-          <div
-            style={{
-              ...summaryCardStyle,
-              backgroundColor: summary.failed > 0 ? "#fff7f7" : "#ffffff",
-              borderColor: summary.failed > 0 ? "#fecaca" : "#e2e8f0",
-            }}
-          >
-            <p style={summaryLabelStyle}>Failed</p>
-            <p style={{ ...summaryValueStyle, color: "#991b1b" }}>{summary.failed}</p>
-          </div>
-          <div
-            style={{
-              ...summaryCardStyle,
-              backgroundColor: summary.processing > 0 ? "#fffbeb" : "#ffffff",
-              borderColor: summary.processing > 0 ? "#fde68a" : "#e2e8f0",
-            }}
-          >
-            <p style={summaryLabelStyle}>Processing</p>
-            <p style={{ ...summaryValueStyle, color: "#92400e" }}>{summary.processing}</p>
-          </div>
-        </div>
-
-        {items.length === 0 && (
-          <div style={emptyStateStyle}>
-            {pilotMode && !hasActiveFilters && pilotEmptyStateMessage
-              ? pilotEmptyStateMessage
-              : pilotMode && pilotQueueView !== "active"
-              ? `No ${getPilotQueueViewLabel(pilotQueueView).toLowerCase()} emails match the current filters.`
-              : queueView === "customer_service"
-              ? "No likely customer-service emails match the current filters. Switch to All Inbox to review everything."
-              : showProblemsOnly
-              ? "No urgent issues right now."
-              : hasActiveFilters
-              ? "No emails match the current filters. Try clearing the search or urgency filter."
-              : "Inbox is empty right now. New emails will appear here when available."}
-          </div>
-        )}
-
-        {items.map((item) => {
-          const pilotItemState = getPilotQueueItemState(pilotItemStates, item.email.id);
-          const pilotItemView = getPilotQueueViewForItem(pilotItemState);
-          const isSelected = item.email.id === selectedEmailId;
-          const isFailed = item.status === "failed";
-          const isPending = item.status === "pending";
-          const isRetrying = retryingEmailId === item.email.id;
-          const priorityLevel = getPriorityLevel(item.result?.priorityScore ?? 0);
-          const isHighPriority = priorityLevel === "High";
-          const actionabilityBadge = item.result
-            ? getActionabilityBadge(item.result.analysis.actionability)
-            : null;
-          const canOpenOutlook = canOpenInOutlook(item);
-          const queueAge = getQueueAgeInfo({
-            receivedAt: item.email.receivedAt,
-            pilotItemState: pilotMode ? pilotItemState : undefined,
-          });
-          const rowSurfaceStyle = getRowSurfaceStyle({
-            isSelected,
-            isFailed,
-            isPending,
-            isHighPriority,
-          });
-
-          return (
-            <div
-              key={item.email.id}
-              style={{
-                borderBottom: "1px solid #e5edf5",
-                transition: "background-color 120ms ease, box-shadow 120ms ease",
-                ...rowSurfaceStyle,
-              }}
-            >
-              <div
-  role="button"
-  tabIndex={0}
-  onClick={() => onSelectEmail(item.email.id)}
-  onKeyDown={(event) => {
-    if (event.key === "Enter" || event.key === " ") {
-      event.preventDefault();
-      onSelectEmail(item.email.id);
-    }
-  }}
-  style={{
-    width: "100%",
-    border: "none",
-    background: "transparent",
-    padding: "18px 20px",
-    textAlign: "left",
-    cursor: "pointer",
-  }}
->
-                <div
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    gap: "12px",
-                    alignItems: "start",
-                    marginBottom: "10px",
-                  }}
-                >
-                  <div style={{ minWidth: 0 }}>
-                    <div
-                      style={{
-                        fontSize: "13px",
-                        fontWeight: 700,
-                        color: isFailed ? "#7f1d1d" : "#334155",
-                        marginBottom: "5px",
-                        letterSpacing: "0.01em",
-                      }}
-                    >
-                      {item.email.senderName}
-                    </div>
-                    <div
-                      style={{
-                        fontSize: isHighPriority || isFailed ? "15px" : "14px",
-                        fontWeight: isHighPriority || isFailed ? 700 : 600,
-                        lineHeight: 1.4,
-                        color: isFailed ? "#991b1b" : "#0f172a",
-                        marginBottom: "2px",
-                        whiteSpace: "nowrap",
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                      }}
-                    >
-                      {item.email.subject}
-                    </div>
-                    <div
-                      style={{
-                        marginTop: "8px",
-                        fontSize: "12px",
-                        lineHeight: 1.5,
-                        color: isFailed ? "#b91c1c" : isPending ? "#92400e" : "#64748b",
-                        whiteSpace: "nowrap",
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                      }}
-                    >
-                      {isFailed
-                        ? item.processingError ?? "This email could not be processed."
-                        : isPending
-                          ? "Processing this email..."
-                          : item.previewText}
-                    </div>
-                  </div>
-
-                  <div
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: "8px",
-                      flexShrink: 0,
-                    }}
-                  >
-                    <span
-                      style={{
-                        fontSize: "12px",
-                        fontWeight: 600,
-                        color: isFailed ? "#991b1b" : isPending ? "#92400e" : "#64748b",
-                      }}
-                    >
-                      {formatReceivedTime(item.email.receivedAt)}
-                    </span>
-                    <button
-                      type="button"
-                      disabled={!canOpenOutlook}
-                      onClick={(event) => {
-                        event.stopPropagation();
-
-                        if (!canOpenOutlook) {
-                          return;
-                        }
-
-                        window.open(buildOutlookSearchUrl(item), "_blank");
-                      }}
-                      style={{
-                        ...inlineActionButtonStyle,
-                        backgroundColor: canOpenOutlook ? "#ffffff" : "#e2e8f0",
-                        color: canOpenOutlook ? "#0f172a" : "#64748b",
-                        cursor: canOpenOutlook ? "pointer" : "not-allowed",
-                      }}
-                    >
-                      Open in Outlook
-                    </button>
-                  </div>
-                </div>
-
-                <div
-                  style={{
-                    display: "flex",
-                    flexWrap: "wrap",
-                    gap: "8px",
-                    alignItems: "center",
-                  }}
-                >
-                  {item.status === "processed" && (
-                    <span
-                      style={{
-                        ...getPriorityBadgeStyle(item.result?.priorityScore ?? 0),
-                        boxShadow: isHighPriority
-                          ? "inset 0 0 0 1px rgba(153, 27, 27, 0.12)"
-                          : "none",
-                      }}
-                    >
-                      {priorityLevel} Priority
-                    </span>
-                  )}
-                  {item.status === "failed" && (
-                    <span
-                      style={{
-                        fontSize: "12px",
-                        fontWeight: 700,
-                        color: "#991b1b",
-                        backgroundColor: "#fee2e2",
-                        boxShadow: "inset 0 0 0 1px rgba(153, 27, 27, 0.12)",
-                        borderRadius: "999px",
-                        padding: "4px 8px",
-                      }}
-                    >
-                      Failed
-                    </span>
-                  )}
-                  {item.status === "pending" && (
-                    <span
-                      style={{
-                        fontSize: "12px",
-                        fontWeight: 700,
-                        color: "#92400e",
-                        backgroundColor: "#fef3c7",
-                        boxShadow: "inset 0 0 0 1px rgba(146, 64, 14, 0.1)",
-                        borderRadius: "999px",
-                        padding: "4px 8px",
-                      }}
-                    >
-                      Processing
-                    </span>
-                  )}
-                  {item.status === "processed" && item.result && (
-                    <>
-                      {isOutlookEmailSource(item.email.source) && (
-                        <span style={sourceBadgeStyle}>From Outlook</span>
-                      )}
-                      {pilotMode && pilotItemView === "waiting_on_customer" && (
-                        <span style={getAgeBadgeStyle(queueAge.label)}>{queueAge.label}</span>
-                      )}
-                      {pilotMode && pilotItemView === "snoozed" && (
-                        <span
-                          style={{
-                            fontSize: "12px",
-                            fontWeight: 700,
-                            color: "#1d4ed8",
-                            backgroundColor: "#dbeafe",
-                            borderRadius: "999px",
-                            padding: "4px 8px",
-                          }}
-                        >
-                          {queueAge.label}
-                        </span>
-                      )}
-                      {pilotMode && pilotItemView === "done" && (
-                        <span
-                          style={{
-                            fontSize: "12px",
-                            fontWeight: 700,
-                            color: "#166534",
-                            backgroundColor: "#dcfce7",
-                            borderRadius: "999px",
-                            padding: "4px 8px",
-                          }}
-                        >
-                          Done
-                        </span>
-                      )}
-                      {pilotMode && pilotItemView === "not_relevant" && (
-                        <span
-                          style={{
-                            fontSize: "12px",
-                            fontWeight: 700,
-                            color: "#475569",
-                            backgroundColor: "#e2e8f0",
-                            borderRadius: "999px",
-                            padding: "4px 8px",
-                          }}
-                        >
-                          Not Relevant
-                        </span>
-                      )}
-                      {(!pilotMode || pilotItemView === "active") && (
-                        <span style={getAgeBadgeStyle(queueAge.label)}>{queueAge.label}</span>
-                      )}
-                      <span
-                        style={{
-                          fontSize: "12px",
-                          fontWeight: 700,
-                          color: "#1d4ed8",
-                          backgroundColor: "#dbeafe",
-                          borderRadius: "999px",
-                          padding: "4px 8px",
-                        }}
-                      >
-                        {getIntentLabel(item.result.analysis.intent)}
-                      </span>
-                      {item.result.analysis.workType && item.result.analysis.workType !== "customer_support" && (
-                        <span
-                          style={{
-                            fontSize: "12px",
-                            fontWeight: 700,
-                            color: "#475569",
-                            backgroundColor: "#e2e8f0",
-                            borderRadius: "999px",
-                            padding: "4px 8px",
-                          }}
-                        >
-                          {getWorkTypeLabel(item.result.analysis.workType)}
-                        </span>
-                      )}
-                      <span style={getUrgencyBadgeStyle(item.result.analysis.urgency)}>
-                        {item.result.analysis.urgency}
-                      </span>
-                      {actionabilityBadge && (
-                        <span style={actionabilityBadge.style}>
-                          {actionabilityBadge.label}
-                        </span>
-                      )}
-                    </>
-                  )}
-                  <span
-                    style={{
-                      fontSize: "12px",
-                      fontWeight: 700,
-                      color: "#334155",
-                      backgroundColor: "#e2e8f0",
-                      borderRadius: "999px",
-                      padding: "4px 8px",
-                    }}
-                  >
-                    {item.issueCount} issues
-                  </span>
-                  {item.status !== "processed" && isOutlookEmailSource(item.email.source) && (
-                    <span style={sourceBadgeStyle}>From Outlook</span>
-                  )}
-                </div>
-              </div>
-
-              {isFailed && (
-                <div style={{ padding: "0 20px 16px" }}>
-                  <button
-                    type="button"
-                    onClick={() => onRetryEmail(item.email.id)}
-                    disabled={isRetrying}
-                    style={{
-                      ...secondaryButtonStyle,
-                      backgroundColor: isRetrying ? "#e2e8f0" : "#ffffff",
-                      color: isRetrying ? "#64748b" : "#0f172a",
-                      cursor: isRetrying ? "not-allowed" : "pointer",
-                    }}
-                  >
-                    {isRetrying ? "Retrying..." : "Retry"}
-                  </button>
-                </div>
-              )}
-            </div>
-          );
-        })}
-
-        {(nextCursor || loadMoreError) && (
-          <div style={footerStyle}>
-            {loadMoreError && (
-              <p style={{ ...subtitleStyle, marginBottom: "10px", color: "#991b1b" }}>
-                {loadMoreError}
-              </p>
-            )}
-            {nextCursor && (
+        {topIssues.length > 0 ? (
+          <div style={topIssuesRowStyle}>
+            {topIssues.map((issue) => (
               <button
+                key={issue.code}
                 type="button"
-                onClick={onLoadMore}
-                disabled={isLoadingMore}
+                onClick={() => onIssueFilterChange(issue.code)}
+                aria-pressed={activeIssueFilter === issue.code}
                 style={{
-                  ...secondaryButtonStyle,
-                  backgroundColor: isLoadingMore ? "#e2e8f0" : "#ffffff",
-                  color: isLoadingMore ? "#64748b" : "#0f172a",
-                  cursor: isLoadingMore ? "not-allowed" : "pointer",
+                  ...topIssueBadgeStyle,
+                  backgroundColor: activeIssueFilter === issue.code ? "#dbeafe" : "#ffffff",
+                  borderColor: activeIssueFilter === issue.code ? "#93c5fd" : "#dbe5f0",
+                  color: activeIssueFilter === issue.code ? "#1d4ed8" : "#334155",
                 }}
               >
-                {isLoadingMore ? "Loading More..." : "Load More"}
+                {issue.label}
+                <span style={{ color: "#64748b" }}>
+                  ({issue.count} {issue.count === 1 ? "email" : "emails"})
+                </span>
               </button>
-            )}
+            ))}
           </div>
+        ) : (
+          <p style={{ ...subtitleStyle, marginTop: "8px" }}>No high-risk issue clusters right now.</p>
         )}
       </div>
+
+      <div style={summaryBarStyle}>
+        <div style={summaryCardStyle}>
+          <p style={summaryLabelStyle}>Total Loaded</p>
+          <p style={summaryValueStyle}>{summary.totalLoaded}</p>
+        </div>
+        <div style={summaryCardStyle}>
+          <p style={summaryLabelStyle}>High Priority</p>
+          <p style={{ ...summaryValueStyle, color: "#991b1b" }}>{summary.highPriority}</p>
+        </div>
+        <div style={summaryCardStyle}>
+          <p style={summaryLabelStyle}>Failed</p>
+          <p style={{ ...summaryValueStyle, color: "#991b1b" }}>{summary.failed}</p>
+        </div>
+        <div style={summaryCardStyle}>
+          <p style={summaryLabelStyle}>Processing</p>
+          <p style={{ ...summaryValueStyle, color: "#92400e" }}>{summary.processing}</p>
+        </div>
+      </div>
+
+      {threads.length === 0 && (
+        <div style={emptyStateStyle}>
+          {pilotMode && !hasActiveFilters && pilotEmptyStateMessage
+            ? pilotEmptyStateMessage
+            : pilotMode && pilotQueueView !== "active"
+              ? `No ${getPilotQueueViewLabel(pilotQueueView).toLowerCase()} emails match the current filters.`
+              : queueView === "customer_service"
+                ? "No likely customer-service emails match the current filters. Switch to All Inbox to review everything."
+                : customerPriorityFilter === "matched_only" && !hasSavedCustomers
+                  ? "No saved customers yet. Add customers in Settings to surface their emails first."
+                  : customerPriorityFilter === "matched_only"
+                    ? "No emails match your saved customers with the current filters."
+                    : showProblemsOnly
+                      ? "No urgent issues right now."
+                      : hasActiveFilters
+                        ? "No threads match the current filters. Try clearing the search or status filters."
+                        : "Inbox is empty right now. New emails will appear here when available."}
+        </div>
+      )}
+
+      {queueDisplayMode === "grouped_by_rep" ? (
+        <GroupedRepQueue
+          sections={groupedRepSections}
+          now={now}
+          selectedEmailId={selectedEmailId}
+          retryingEmailId={retryingEmailId}
+          currentRepId={currentRepId}
+          onSelectEmail={onSelectEmail}
+          onTakeThread={onTakeThread}
+          onRetryEmail={onRetryEmail}
+        />
+      ) : (
+        <div style={{ display: "grid" }}>
+          {threads.map((thread) => (
+            <ThreadedQueueCard
+              key={thread.id}
+              thread={thread}
+              now={now}
+              isSelected={thread.items.some((item) => item.email.id === selectedEmailId)}
+              retryingEmailId={retryingEmailId}
+              onSelect={() => onSelectEmail(thread.representativeItem.email.id)}
+              onTakeThread={(reason) => onTakeThread(thread.id, reason)}
+              onRetryEmail={onRetryEmail}
+              currentRepId={currentRepId}
+            />
+          ))}
+        </div>
+      )}
+
+      {(nextCursor || loadMoreError) && (
+        <div style={footerStyle}>
+          {loadMoreError && (
+            <p style={{ ...subtitleStyle, marginBottom: "10px", color: "#991b1b" }}>
+              {loadMoreError}
+            </p>
+          )}
+          {nextCursor && (
+            <button
+              type="button"
+              onClick={onLoadMore}
+              disabled={isLoadingMore}
+              style={{
+                ...secondaryButtonStyle,
+                backgroundColor: isLoadingMore ? "#e2e8f0" : "#ffffff",
+                color: isLoadingMore ? "#64748b" : "#0f172a",
+                cursor: isLoadingMore ? "not-allowed" : "pointer",
+              }}
+            >
+              {isLoadingMore ? "Loading More..." : "Load More"}
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }

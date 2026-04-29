@@ -1,4 +1,8 @@
-import type { EmailSourceListResult, RawInboxEmail } from "../../src/types/inboxSource";
+import type {
+  EmailSourceListResult,
+  RawInboxEmail,
+  RawInboxEmailHeader,
+} from "../../src/types/inboxSource";
 
 const INVALID_GRAPH_RESPONSE_ERROR = "Invalid Outlook Graph inbox response.";
 
@@ -7,11 +11,28 @@ type GraphMessage = {
   conversationId?: string;
   subject?: string;
   receivedDateTime?: string;
+  webLink?: string;
   bodyPreview?: string;
   body?: {
     contentType?: string;
     content?: string;
   };
+  toRecipients?: Array<{
+    emailAddress?: {
+      name?: string;
+      address?: string;
+    };
+  }>;
+  ccRecipients?: Array<{
+    emailAddress?: {
+      name?: string;
+      address?: string;
+    };
+  }>;
+  internetMessageHeaders?: Array<{
+    name?: string;
+    value?: string;
+  }>;
   from?: {
     emailAddress?: {
       name?: string;
@@ -102,6 +123,31 @@ function normalizePreviewText(bodyPreview?: string, bodyText?: string): string |
   return candidate && candidate.length > 0 ? candidate : undefined;
 }
 
+function normalizeRecipients(
+  recipients?: GraphMessage["toRecipients"],
+): string[] | undefined {
+  const normalizedRecipients =
+    recipients
+      ?.map((recipient) => recipient.emailAddress?.address?.trim() || "")
+      .filter((recipient) => recipient.length > 0) ?? [];
+
+  return normalizedRecipients.length > 0 ? normalizedRecipients : undefined;
+}
+
+function normalizeHeaders(
+  headers?: GraphMessage["internetMessageHeaders"],
+): RawInboxEmailHeader[] | undefined {
+  const normalizedHeaders =
+    headers
+      ?.map((header) => ({
+        name: header.name?.trim() || "",
+        value: header.value?.trim() || "",
+      }))
+      .filter((header) => header.name.length > 0 || header.value.length > 0) ?? [];
+
+  return normalizedHeaders.length > 0 ? normalizedHeaders : undefined;
+}
+
 function mapGraphMessageToRawInboxEmail(message: GraphMessage): RawInboxEmail {
   const id = message.id?.trim() || "";
   const bodyText = normalizeBodyText(message.body, message.bodyPreview);
@@ -120,6 +166,10 @@ function mapGraphMessageToRawInboxEmail(message: GraphMessage): RawInboxEmail {
     bodyText,
     bodyHtml: message.body?.content,
     previewText: normalizePreviewText(message.bodyPreview, bodyText),
+    outlookWebLink: message.webLink?.trim() || undefined,
+    toRecipients: normalizeRecipients(message.toRecipients),
+    ccRecipients: normalizeRecipients(message.ccRecipients),
+    internetMessageHeaders: normalizeHeaders(message.internetMessageHeaders),
   };
 }
 

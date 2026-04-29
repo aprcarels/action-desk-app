@@ -17,19 +17,29 @@ import type {
   WorkType,
 } from "../types/actionDesk";
 
-function safeLower(value: unknown): string {
-  return typeof value === "string" ? value.toLowerCase() : "";
-}
-
 const CUSTOMER_SUPPORT_PATTERNS = [
   "where is my order",
   "order",
+  "order status",
+  "status update",
+  "status request",
+  "update request",
   "shipment",
   "tracking",
+  "tracking number",
+  "delivery",
+  "delivered",
+  "late",
+  "delay",
+  "delayed",
   "damaged",
   "damage",
   "missing item",
   "missing items",
+  "wrong item",
+  "incorrect item",
+  "not received",
+  "never received",
   "short shipment",
   "cancel",
   "cancellation",
@@ -43,6 +53,16 @@ const CUSTOMER_SUPPORT_PATTERNS = [
   "charge",
   "refund",
   "replacement",
+  "return",
+  "exchange",
+  "help",
+  "help me",
+  "please help",
+  "issue",
+  "problem",
+  "complaint",
+  "disappointed",
+  "unacceptable",
   "customer",
 ];
 
@@ -119,6 +139,31 @@ const VENDOR_PATTERNS = [
   "business account",
 ];
 
+const ACTIONABLE_CUSTOMER_PATTERNS = [
+  "where is",
+  "can you help",
+  "please help",
+  "need help",
+  "please advise",
+  "please update",
+  "please send",
+  "please confirm",
+  "let me know",
+  "refund",
+  "replace",
+  "return",
+  "cancel",
+  "damaged",
+  "missing",
+  "wrong item",
+  "not received",
+  "status",
+  "tracking",
+];
+
+const ORDER_IDENTIFIER_PATTERN =
+  /\b(?:ord-\d+|order\s*#?\s*[a-z0-9-]{4,}|\bpo[-\s]?\d+|\b\d{4,}-\d{4,}\b)\b/i;
+
 const SYSTEM_SENDER_PATTERNS = [
   "noreply@",
   "no-reply@",
@@ -137,15 +182,66 @@ function normalizeEmailText(email: EmailItem): string {
     .toLowerCase();
 }
 
-function hasCustomerSignals(text: string, analysis?: EmailAnalysis): boolean {
+function getLatestNormalizedMessage(email: EmailItem): string {
+  const latestMessageText = extractLatestMessageText(email.body || "");
+
+  return (
+    latestMessageText ||
+    [email.subject, email.previewText, email.body]
+      .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+      .join("\n")
+  ).toLowerCase();
+}
+
+function hasTextOrderIdentifier(text: string): boolean {
+  return ORDER_IDENTIFIER_PATTERN.test(text);
+}
+
+function hasOrderIdentifier(
+  text: string,
+  analysis?: EmailAnalysis,
+  options?: { allowAnalysisIdentifiers?: boolean },
+): boolean {
+  return (
+    hasTextOrderIdentifier(text) ||
+    (options?.allowAnalysisIdentifiers === true &&
+      (Boolean(analysis?.orderNumber) || Boolean(analysis?.caseIdentifiers?.length)))
+  );
+}
+
+function hasDirectCustomerSignals(text: string, analysis?: EmailAnalysis): boolean {
   return (
     includesAny(text, CUSTOMER_SUPPORT_PATTERNS) ||
+    includesAny(text, ACTIONABLE_CUSTOMER_PATTERNS) ||
+    hasOrderIdentifier(text, analysis, { allowAnalysisIdentifiers: false }) ||
+    Boolean(analysis?.hasDeadlineRequest) ||
+    Boolean(analysis?.hasConfirmationRequest && analysis?.hasLogisticsContext)
+  );
+}
+
+function hasActionableRequestSignals(text: string, analysis?: EmailAnalysis): boolean {
+  return (
     hasClearRequest(text) ||
-    Boolean(analysis?.orderNumber) ||
+    Boolean(analysis?.replyNeeded === "yes") ||
+    Boolean(analysis?.actionability === "action_required")
+  );
+}
+
+function hasCustomerTopicSignals(text: string, analysis?: EmailAnalysis): boolean {
+  return (
+    includesAny(text, CUSTOMER_SUPPORT_PATTERNS) ||
+    includesAny(text, ACTIONABLE_CUSTOMER_PATTERNS) ||
+    hasOrderIdentifier(text, analysis, { allowAnalysisIdentifiers: true }) ||
     Boolean(analysis?.hasDeadlineRequest) ||
     Boolean(analysis?.hasConfirmationRequest && analysis?.hasLogisticsContext) ||
     Boolean(analysis && analysis.intent !== "general_support") ||
     Boolean(analysis && analysis.risks.length > 0)
+  );
+}
+
+function hasCustomerSignals(text: string, analysis?: EmailAnalysis): boolean {
+  return (
+    hasCustomerTopicSignals(text, analysis) || hasActionableRequestSignals(text, analysis)
   );
 }
 
@@ -181,8 +277,8 @@ export function classifyWorkType(
   const sender = (email.senderEmail || "").toLowerCase();
 
   const explicitCustomerCase =
-    includesAny(normalizedLatestMessage, CUSTOMER_SUPPORT_PATTERNS) ||
-    /\bord-\d+\b/i.test(normalizedLatestMessage);
+    hasDirectCustomerSignals(normalizedLatestMessage, analysis) ||
+    hasTextOrderIdentifier(normalizedLatestMessage);
 
   const customerSignals = hasCustomerSignals(normalizedLatestMessage, analysis);
   const suspicious = includesAny(normalizedLatestMessage, SUSPICIOUS_PATTERNS);
@@ -198,7 +294,8 @@ export function classifyWorkType(
 
   const vendor =
     includesAny(normalizedLatestMessage, VENDOR_PATTERNS) &&
-    !explicitCustomerCase;
+    !hasDirectCustomerSignals(normalizedLatestMessage, analysis) &&
+    !hasTextOrderIdentifier(normalizedLatestMessage);
 
   const internal =
     includesAny(normalizedLatestMessage, INTERNAL_PATTERNS) ||
@@ -217,15 +314,23 @@ export function classifyWorkType(
     return "vendor";
   }
 
-  if (internal) {
+  if (threadContinuation && !hasClearRequest(normalizedLatestMessage) && !explicitCustomerCase) {
+    return "internal";
+  }
+
+  if (internal && !hasDirectCustomerSignals(normalizedLatestMessage, analysis)) {
     return "internal";
   }
 
   if (explicitCustomerCase || customerSignals) {
-    return "customer_service";
+    return "customer_support";
   }
 
-  return "other";
+  if (internal) {
+    return "internal";
+  }
+
+  return "unknown";
 }
 
 function createSuppressedAnalysis(
@@ -340,6 +445,46 @@ export function normalizeProcessedEmailResult(
   };
 }
 
-export function shouldShowInCustomerServiceQueue(_item: ProcessedEmail): boolean {
-  return true;
+export function shouldShowInCustomerServiceQueue(item: ProcessedEmail): boolean {
+  if (item.status !== "processed" || !item.result) {
+    return true;
+  }
+
+  const analysis = item.result.analysis;
+  const latestMessageText = getLatestNormalizedMessage(item.email);
+  const fullText = normalizeEmailText(item.email);
+  const hasBroadCustomerSignals =
+    hasCustomerTopicSignals(latestMessageText, analysis) ||
+    hasCustomerTopicSignals(fullText, analysis);
+  const hasDirectCustomerContext =
+    hasDirectCustomerSignals(latestMessageText, analysis) ||
+    hasDirectCustomerSignals(fullText, analysis);
+  const hasActionableCustomerAsk =
+    hasActionableRequestSignals(latestMessageText, analysis);
+  const isContinuationWithoutAsk =
+    analysis.isThreadContinuation === true &&
+    !analysis.hasClearRequest &&
+    !hasBroadCustomerSignals;
+
+  if (analysis.workType === "customer_support") {
+    return true;
+  }
+
+  if (
+    analysis.workType === "suspicious" ||
+    analysis.workType === "system" ||
+    analysis.workType === "vendor"
+  ) {
+    return false;
+  }
+
+  if (analysis.workType === "internal") {
+    return hasDirectCustomerContext || hasActionableCustomerAsk;
+  }
+
+  if (isContinuationWithoutAsk) {
+    return false;
+  }
+
+  return hasBroadCustomerSignals || hasActionableCustomerAsk;
 }

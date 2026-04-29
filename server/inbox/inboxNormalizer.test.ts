@@ -22,6 +22,27 @@ describe("normalizeGraphMessagesResponse", () => {
               address: "sam@example.com",
             },
           },
+          webLink: "https://outlook.office.com/mail/deeplink/read/msg-1",
+          toRecipients: [
+            {
+              emailAddress: {
+                address: "ecomcsr@apexpress.com",
+              },
+            },
+          ],
+          ccRecipients: [
+            {
+              emailAddress: {
+                address: "csr1@apexpress.com",
+              },
+            },
+          ],
+          internetMessageHeaders: [
+            {
+              name: "Delivered-To",
+              value: "ecomcsr@apexpress.com",
+            },
+          ],
         },
       ],
     });
@@ -37,6 +58,15 @@ describe("normalizeGraphMessagesResponse", () => {
       fromName: "Sam Customer",
       fromEmail: "sam@example.com",
       previewText: "Short preview from Graph",
+      outlookWebLink: "https://outlook.office.com/mail/deeplink/read/msg-1",
+      toRecipients: ["ecomcsr@apexpress.com"],
+      ccRecipients: ["csr1@apexpress.com"],
+      internetMessageHeaders: [
+        {
+          name: "Delivered-To",
+          value: "ecomcsr@apexpress.com",
+        },
+      ],
     });
     expect(result.emails[0].receivedAt).toBe("2026-04-01T17:15:00.000Z");
     expect(result.emails[0].bodyText).toContain("Hello team,");

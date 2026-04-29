@@ -39,7 +39,6 @@ export async function loadRawInboxQueue(
   const pilotMode = isPilotModeEnabled();
 
   if (pilotMode && resolveInboxSourceMode() !== "api") {
-    console.log("[loadInboxQueue] pilot mode enabled and inbox source is not api; returning empty inbox");
     return {
       items: [],
       nextCursor: undefined,
@@ -50,31 +49,24 @@ export async function loadRawInboxQueue(
     console.info("[Action Desk] Inbox source mode:", resolveInboxSourceMode());
   }
 
-  console.log("[loadInboxQueue] VITE_INBOX_SOURCE:", getEnv("VITE_INBOX_SOURCE"));
-  console.log("[loadInboxQueue] resolved mode:", resolveInboxSourceMode());
-  console.log("[loadInboxQueue] interactiveAuth:", options?.interactiveAuth);
-  console.log(
-    "[loadInboxQueue] source:",
-    resolveInboxSourceMode() === "api" ? "apiEmailSource" : "devJsonEmailSource",
-  );
-
   const sourceResult = await getActiveEmailSource().listEmails({
     cursor: options?.cursor,
     interactiveAuth: options?.interactiveAuth,
   });
-
-  console.log("[loadInboxQueue] sourceResult email count:", sourceResult.emails.length);
 
   const visibleEmails = filterInboxEmailsForPilotMode(
     sourceResult.emails,
     pilotMode,
   );
 
-  console.log("[loadInboxQueue] visible email count after pilot filter:", visibleEmails.length);
+  // TODO: Rebuild inbox filtering safely.
+  // Do NOT reintroduce strict filtering that can hide all emails.
+  // Future approach should classify emails, not hard-filter them.
+  const filteredRelevantEmails = visibleEmails;
 
   return {
-    items: visibleEmails,
-    nextCursor: visibleEmails.length > 0 ? sourceResult.nextCursor : undefined,
+    items: filteredRelevantEmails,
+    nextCursor: sourceResult.nextCursor,
   };
 }
 

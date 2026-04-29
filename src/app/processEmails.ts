@@ -3,18 +3,23 @@ import {
   normalizeProcessedEmailResult,
   shouldShowInCustomerServiceQueue,
 } from "../services/customerServiceMail";
+import { applyCustomerPriorityToEmails } from "../services/customerMatching";
 import { buildAnalysisInput } from "../services/analysisInput";
 import type {
   ActionDeskResult,
   EmailItem,
   IntentCode,
   ProcessedEmail,
+  SavedCustomer,
 } from "../types/actionDesk";
+
+export type CustomerPriorityFilter = "all" | "matched_only";
 
 export type QueueFilters = {
   searchQuery: string;
   urgency: "all" | "high" | "medium" | "low";
   intent: IntentCode | "all";
+  customerPriority: CustomerPriorityFilter;
   queueView?: "customer_service" | "all_inbox";
 };
 
@@ -107,14 +112,34 @@ function getReceivedAtTimestamp(receivedAt: string): number {
   return Number.isNaN(timestamp) ? 0 : timestamp;
 }
 
+export function applyCustomerPriority(
+  items: ProcessedEmail[],
+  customers: SavedCustomer[],
+): ProcessedEmail[] {
+  return applyCustomerPriorityToEmails(items, customers);
+}
+
+export function rematchLoadedQueueItems(
+  items: ProcessedEmail[],
+  customers: SavedCustomer[],
+): ProcessedEmail[] {
+  return sortProcessedEmails(applyCustomerPriority(items, customers));
+}
+
 export function sortProcessedEmails(items: ProcessedEmail[]): ProcessedEmail[] {
   return [...items].sort((left, right) => {
-    const statusRank: Record<ProcessedEmail["status"], number> = {
-      processed: 0,
-      pending: 1,
-      failed: 2,
+    const getStatusRank = (item: ProcessedEmail): number => {
+      if (item.status === "processed") {
+        return item.isCustomerPriority ? 0 : 1;
+      }
+
+      if (item.status === "pending") {
+        return 2;
+      }
+
+      return 3;
     };
-    const statusDifference = statusRank[left.status] - statusRank[right.status];
+    const statusDifference = getStatusRank(left) - getStatusRank(right);
 
     if (statusDifference !== 0) {
       return statusDifference;
@@ -156,6 +181,8 @@ export function filterProcessedEmails(
       filters.intent === "all" ||
       (item.status === "processed" &&
         item.result?.analysis.intent === filters.intent);
+    const matchesCustomerPriority =
+      filters.customerPriority !== "matched_only" || item.isCustomerPriority;
 
     const matchesSearch =
       query.length === 0 ||
@@ -166,6 +193,7 @@ export function filterProcessedEmails(
       matchesQueueView &&
       matchesUrgency &&
       matchesIntent &&
+      matchesCustomerPriority &&
       matchesSearch
     );
   });

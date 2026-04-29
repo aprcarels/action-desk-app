@@ -7,7 +7,11 @@ import {
 import { dirname, resolve } from "node:path";
 import { getMockRawInboxEmails } from "../src/mocks/mockInboxApi";
 import { cleanEmailText } from "../src/services/cleanEmailText";
-import type { EmailSourceListResult, RawInboxEmail } from "../src/types/inboxSource";
+import type {
+  EmailSourceListResult,
+  RawInboxEmail,
+  RawInboxEmailHeader,
+} from "../src/types/inboxSource";
 
 type InboxImportPayload = {
   id: string;
@@ -20,6 +24,10 @@ type InboxImportPayload = {
 
 const DEFAULT_PAGE_SIZE = 6;
 const importedInboxFilePath = resolve(__dirname, "..", ".local-data", "imported-inbox.json");
+
+function isDemoDataEnabled(): boolean {
+  return process.env.ACTION_DESK_ENABLE_DEMO_DATA === "true";
+}
 
 function ensureImportedInboxFile() {
   const folderPath = dirname(importedInboxFilePath);
@@ -40,6 +48,18 @@ function isPersistedRawInboxEmail(value: unknown): value is RawInboxEmail {
 
   const candidate = value as Record<string, unknown>;
 
+  const isRawInboxEmailHeader = (header: unknown): header is RawInboxEmailHeader => {
+    if (!header || typeof header !== "object") {
+      return false;
+    }
+
+    const candidateHeader = header as Record<string, unknown>;
+    return (
+      typeof candidateHeader.name === "string" &&
+      typeof candidateHeader.value === "string"
+    );
+  };
+
   return (
     typeof candidate.id === "string" &&
     typeof candidate.externalId === "string" &&
@@ -50,8 +70,20 @@ function isPersistedRawInboxEmail(value: unknown): value is RawInboxEmail {
     typeof candidate.bodyText === "string" &&
     typeof candidate.provider === "string" &&
     (candidate.threadId === undefined || typeof candidate.threadId === "string") &&
+    (candidate.locationId === undefined || typeof candidate.locationId === "string") &&
     (candidate.bodyHtml === undefined || typeof candidate.bodyHtml === "string") &&
-    (candidate.previewText === undefined || typeof candidate.previewText === "string")
+    (candidate.previewText === undefined || typeof candidate.previewText === "string") &&
+    (candidate.outlookWebLink === undefined ||
+      typeof candidate.outlookWebLink === "string") &&
+    (candidate.toRecipients === undefined ||
+      (Array.isArray(candidate.toRecipients) &&
+        candidate.toRecipients.every((recipient) => typeof recipient === "string"))) &&
+    (candidate.ccRecipients === undefined ||
+      (Array.isArray(candidate.ccRecipients) &&
+        candidate.ccRecipients.every((recipient) => typeof recipient === "string"))) &&
+    (candidate.internetMessageHeaders === undefined ||
+      (Array.isArray(candidate.internetMessageHeaders) &&
+        candidate.internetMessageHeaders.every(isRawInboxEmailHeader)))
   );
 }
 
@@ -147,9 +179,12 @@ export function getInboxPage(options?: {
 }): EmailSourceListResult {
   importedInboxStore = loadPersistedImportedEmails();
 
-  const seededEmails = getMockRawInboxEmails().filter(
-    (seededEmail) => !importedInboxStore.some((importedEmail) => importedEmail.id === seededEmail.id),
-  );
+  const seededEmails = isDemoDataEnabled()
+    ? getMockRawInboxEmails().filter(
+        (seededEmail) =>
+          !importedInboxStore.some((importedEmail) => importedEmail.id === seededEmail.id),
+      )
+    : [];
   const rawEmails = [...importedInboxStore, ...seededEmails];
   const parsedCursor = options?.cursor ? Number.parseInt(options.cursor, 10) : 0;
   const startIndex = Number.isNaN(parsedCursor) ? 0 : Math.max(parsedCursor, 0);

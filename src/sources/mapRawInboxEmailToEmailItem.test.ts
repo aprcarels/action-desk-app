@@ -20,4 +20,22 @@ describe("mapRawInboxEmailToEmailItem", () => {
     expect(item.senderName).toBe("customer@example.com");
     expect(item.source).toBe("outlook_graph");
   });
+
+  it("preserves the exact Outlook webLink from the signed-in user's mailbox message", () => {
+    const item = mapRawInboxEmailToEmailItem({
+      id: "email-2",
+      externalId: "email-2",
+      provider: "outlook_graph",
+      subject: "Group inbox message",
+      fromName: "CSR Group",
+      fromEmail: "customer@example.com",
+      receivedAt: "2026-04-01T10:00:00Z",
+      bodyText: "Need status update",
+      outlookWebLink: "https://outlook.office.com/mail/deeplink/read/email-2",
+    });
+
+    expect(item.outlookWebLink).toBe(
+      "https://outlook.office.com/mail/deeplink/read/email-2",
+    );
+  });
 });

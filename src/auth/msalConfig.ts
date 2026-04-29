@@ -25,11 +25,18 @@ export function getMsalRuntimeConfig(): MsalRuntimeConfig {
   };
 }
 
-function normalizeLocalhostHttps(url: string): string {
+function normalizeLocalhostProtocol(
+  url: string,
+  options?: { preferHttps?: boolean },
+): string {
   try {
     const parsedUrl = new URL(url);
 
-    if (parsedUrl.hostname === "localhost" && parsedUrl.protocol === "http:") {
+    if (
+      options?.preferHttps === true &&
+      parsedUrl.hostname === "localhost" &&
+      parsedUrl.protocol === "http:"
+    ) {
       parsedUrl.protocol = "https:";
       return parsedUrl.toString();
     }
@@ -40,13 +47,28 @@ function normalizeLocalhostHttps(url: string): string {
   }
 }
 
+function isElectronDesktopRuntime(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    Boolean(window.actionDeskDesktop?.isElectron)
+  );
+}
+
 function resolveRedirectBaseUrl(config: MsalRuntimeConfig): string {
-  const fallbackOrigin =
+  const isElectronDesktop = isElectronDesktopRuntime();
+  const windowOrigin =
     typeof window !== "undefined" && window.location?.origin
       ? window.location.origin
-      : "https://localhost:5173";
+      : undefined;
+  const fallbackOrigin = windowOrigin ?? "https://localhost:5173";
+  const configuredBaseUrl =
+    isElectronDesktop && windowOrigin
+      ? windowOrigin
+      : config.redirectUri ?? fallbackOrigin;
 
-  return normalizeLocalhostHttps(config.redirectUri ?? fallbackOrigin);
+  return normalizeLocalhostProtocol(configuredBaseUrl, {
+    preferHttps: !isElectronDesktop,
+  });
 }
 
 function resolveAuthCallbackRedirectUri(config: MsalRuntimeConfig): string {

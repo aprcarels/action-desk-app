@@ -30,3 +30,6 @@ dist-ssr
 ,env
 temp-morning-briefing
 temp-morning-briefing/
+# Ignore build output
+release/
+dist-electron/
