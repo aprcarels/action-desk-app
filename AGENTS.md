@@ -19,6 +19,20 @@ Action Desk helps support reps triage customer emails faster by generating a use
 - Preserve the existing React + TypeScript + Vite structure unless there is a strong reason to change it
 - Avoid introducing backend services, auth, databases, or network dependencies for MVP work
 
+## Engineering Practices (New)
+
+### TDD (Red-Green-Refactor)
+- Write one test before implementing new logic
+- Ensure it fails (Red)
+- Implement minimal code to pass (Green)
+- Refactor safely while tests pass
+
+### Service Contract Thinking
+- Treat `processEmails` and `runActionDesk` as strict boundaries
+- Keep data transformation in pipeline layer, not UI
+- Prefer explicit types over loose objects
+- Avoid throwing errors — return structured results when expanding logic
+
 ## UI/UX Principles
 - Optimize for fast triage and scannability
 - Make the queue easy to scan by urgency, intent, and issue count
