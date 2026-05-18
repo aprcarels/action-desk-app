@@ -39,6 +39,57 @@ describe("generateReply", () => {
     expect(draft).toBe("");
   });
 
+  it("builds a deterministic fallback for explicit regeneration when review-only customer context exists", () => {
+    const draft = generateReply(
+      buildAnalysis({
+        actionability: "review_needed",
+        replyNeeded: "maybe",
+        hasClearRequest: false,
+        orderNumber: undefined,
+      }),
+      undefined,
+      {
+        allowDeterministicFallback: true,
+        context: {
+          subject: "Need help with yesterday's delivery",
+          senderName: "Jordan Smith",
+          senderEmail: "jordan@example.com",
+          body: "Can someone check what happened here?",
+          bodyPreview: "Can someone check what happened here?",
+          summary: "Customer needs review before a specific support action is clear.",
+          customerName: "Acme",
+          threadItemCount: 2,
+        },
+      },
+    );
+
+    expect(draft).toContain("Hi Jordan,");
+    expect(draft).toContain("I can help review the request for Acme.");
+    expect(draft).toContain("latest shipment detail");
+    expect(draft).toContain("Best,\nSupport Team");
+  });
+
+  it("keeps deterministic fallback disabled for messages that do not need a customer reply", () => {
+    const draft = generateReply(
+      buildAnalysis({
+        intent: "general_support",
+        messageType: "awareness_only",
+        actionability: "awareness_only",
+        replyNeeded: "no",
+      }),
+      undefined,
+      {
+        allowDeterministicFallback: true,
+        context: {
+          subject: "FYI only",
+          body: "No action needed.",
+        },
+      },
+    );
+
+    expect(draft).toBe("");
+  });
+
   it("builds a grounded order-status reply when order context exists", () => {
     const order: OrderContext = {
       orderNumber: "ORD-1002",

@@ -63,7 +63,7 @@ function mapSnapshotAnalysisToCurrentAnalysis(
 function mapSnapshotSourceToCurrentSource(
   source: PersistedAnalysisSnapshot["analysisSource"],
 ): ActionDeskResult["analysisSource"] {
-  return source === "ai" ? "ai" : "fallback";
+  return source;
 }
 
 function mapQueueItemToOrderContext(

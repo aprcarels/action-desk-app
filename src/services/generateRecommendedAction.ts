@@ -33,6 +33,10 @@ function getOrderLabel(orderNumber?: string): string {
   return orderNumber ? `for ${orderNumber}` : "for the order";
 }
 
+function requestMissingIdentifierAction(context: string): string {
+  return `Request the order number or usable reference for ${context}, then mark waiting on customer until it is provided.`;
+}
+
 export function generateRecommendedAction({
   intent,
   urgency,
@@ -100,61 +104,61 @@ export function generateRecommendedAction({
   }
 
   if (messageType === "internal_alert" || actionability === "review_needed") {
-    return "Review the alert or informational message, confirm whether any manual follow-up is needed, and avoid replying unless ownership or customer follow-up is explicitly requested.";
+    return "Review the alert, confirm whether manual follow-up is needed, and avoid replying unless ownership or customer follow-up is explicit.";
   }
 
   if (intent === "pod_request") {
     return orderNumber
       ? orderContext?.shipmentStatus === "Delivered"
-        ? `Pull the POD ${orderLabel}, confirm who signed, and send the delivery record back to the customer.`
-        : `Review the latest delivery status ${orderLabel}, confirm whether POD is available yet, and update the customer.`
+        ? `Pull the POD ${orderLabel}, verify the signed-by details, and send the delivery record to the customer.`
+        : `Verify delivery status ${orderLabel}, check whether POD is available, and send a status update.`
       : hasIdentifiers
-        ? `Review the delivery details for ${referenceLabel ?? reviewLabel}, confirm whether POD is available, and update the customer.`
-        : "Ask for the order number so the delivery record and POD can be retrieved.";
+        ? `Verify delivery details for ${referenceLabel ?? reviewLabel}, check whether POD is available, and send a status update.`
+        : requestMissingIdentifierAction("the POD request");
   }
 
   if (intent === "cancellation_request") {
     return orderNumber
       ? orderContext?.status === "Processing" || orderContext?.shipmentStatus === "Label Created"
-        ? `Try to stop fulfillment ${orderLabel}, confirm whether cancellation is still possible, and reply with the outcome.`
-        : `Confirm whether ${orderLabel} has already shipped, then advise the customer on cancellation or return options.`
+        ? `Check fulfillment status ${orderLabel}, escalate to warehouse to stop shipment if possible, and reply with the cancellation outcome.`
+        : `Verify shipped status ${orderLabel}, then send cancellation, return, or refund options.`
       : hasIdentifiers
-        ? `Review ${reviewLabel}, confirm whether cancellation can still be honored, and reply with the next step.`
-        : "Ask for the order number so cancellation eligibility can be checked.";
+        ? `Check fulfillment status for ${reviewLabel}, confirm whether cancellation can still be honored, and reply with the next step.`
+        : requestMissingIdentifierAction("the cancellation request");
   }
 
   if (intent === "short_shipment") {
     return orderNumber
-      ? `Review the shipped quantity ${orderLabel}, confirm which items are short, and reply with the replacement or credit plan.`
+      ? `Check warehouse pick/pack and shipped quantity ${orderLabel}, confirm short items, and send the replacement or credit plan.`
       : hasIdentifiers
-        ? `Review ${reviewLabel}, confirm which items are short, and reply with the replacement or credit plan.`
-        : "Ask for the order number so the shipment contents can be checked against the order.";
+        ? `Check warehouse pick/pack and shipped quantity for ${reviewLabel}, confirm short items, and send the replacement or credit plan.`
+        : requestMissingIdentifierAction("the short-shipment claim");
   }
 
   if (intent === "damaged_shipment") {
     return orderNumber
-      ? `Document the reported damage ${orderLabel}, confirm replacement or claim steps, and send the resolution plan.`
+      ? `Document the damage ${orderLabel}, verify shipment details, and send the replacement or claim path.`
       : hasIdentifiers
-        ? `Document the reported damage tied to ${reviewLabel}, confirm replacement or claim steps, and send the resolution plan.`
-        : "Ask for the order number so the damaged shipment can be reviewed and next steps confirmed.";
+        ? `Document the damage tied to ${reviewLabel}, verify shipment details, and send the replacement or claim path.`
+        : requestMissingIdentifierAction("the damage report");
   }
 
   if (intent === "address_change") {
     return orderNumber
       ? orderContext?.status === "Processing" || orderContext?.shipmentStatus === "Label Created"
-        ? `Check whether the ship-to address can still be corrected ${orderLabel}, update it if allowed, and confirm back to the customer.`
-        : `Confirm whether ${orderLabel} is already too far in transit for an address change, then reply with the available options.`
+        ? `Confirm the corrected address, check whether ship-to can still be updated ${orderLabel}, and reply with the outcome.`
+        : `Verify transit status ${orderLabel}, confirm whether an address change is still possible, and send available options.`
       : hasIdentifiers
-        ? `Review the requested change for ${reviewLabel} and confirm the available next step.`
-        : "Ask for the order number so the address change request can be reviewed.";
+        ? `Confirm the corrected address, review the requested change for ${reviewLabel}, and reply with the available next step.`
+        : requestMissingIdentifierAction("the address change");
   }
 
   if (intent === "billing_question") {
     return orderNumber
-      ? `Review the invoice and charges ${orderLabel}, confirm the source of the discrepancy, and reply with the correction or explanation.`
+      ? `Verify invoice, refund, or charge details ${orderLabel}, confirm the discrepancy, and reply with the correction or explanation.`
       : hasIdentifiers
-        ? `Review the billing details tied to ${reviewLabel} and reply with the correction or explanation.`
-        : "Ask for the order number or invoice reference so the billing issue can be reviewed.";
+        ? `Verify invoice, refund, or charge details tied to ${reviewLabel} and reply with the correction or explanation.`
+        : requestMissingIdentifierAction("the billing or refund issue");
   }
 
   if (intent === "operational_confirmation") {
@@ -188,8 +192,8 @@ export function generateRecommendedAction({
 
     if (!orderNumber) {
       return hasIdentifiers
-        ? `Review ${reviewLabel}, confirm the latest status tied to the referenced identifier, and send the customer a neutral update.`
-        : "Ask the customer for the order number so the shipment can be located before sending a status update.";
+        ? `Verify status for ${reviewLabel}, then send the customer a clear status update.`
+        : requestMissingIdentifierAction("the shipment status request");
     }
 
     if (hasDuplicateShipmentRisk) {
@@ -197,11 +201,11 @@ export function generateRecommendedAction({
     }
 
     if (hasMissingDeliveryRisk) {
-      return `Review the delivery scan and carrier notes ${orderLabel}, check for misdelivery, and update the customer on the investigation.`;
+      return `Review delivery scan and carrier proof ${orderLabel}, check for misdelivery, and send an investigation update.`;
     }
 
     if (orderContext?.shipmentStatus === "Exception" || orderContext?.status === "Delayed") {
-      return `Review the carrier exception ${orderLabel}, confirm the latest movement and delay reason, and send the customer a concrete update.`;
+      return `Check carrier and warehouse scans ${orderLabel}, escalate to warehouse if movement is unclear, and send a delay update.`;
     }
 
     if (statusLabel) {
@@ -209,7 +213,7 @@ export function generateRecommendedAction({
     }
 
     if (hasDelayRisk) {
-      return `Check the latest shipment scan ${orderLabel}, confirm why updates have stalled, and reply with the next expected movement.`;
+      return `Follow up on delayed shipment scans ${orderLabel}, check warehouse status, and reply with the next expected movement.`;
     }
 
     return `Verify the latest shipment status ${orderLabel} and send the customer the current update.`;
@@ -242,16 +246,16 @@ export function generateRecommendedAction({
       return `Review whether the requested timing for ${reviewLabel} has already passed, confirm the current status immediately, and reply with the next support step.`;
     }
 
-    return `Review ${reviewLabel} and reply with the next support step.`;
+    return `Review ${reviewLabel}, verify the current operational status, and reply with the next support step.`;
   }
 
   if (orderNumber) {
-    return `Review the latest order details ${orderLabel} and reply with the next support step.`;
+    return `Review latest order details ${orderLabel}, verify the current operational status, and reply with the next support step.`;
   }
 
   if (urgency === "high") {
-    return "Review the request promptly, identify the missing details needed to act, and send the customer a clear next step.";
+    return "Identify the missing customer/order details, request them if needed, and send a clear next step today.";
   }
 
-  return "Review the request details and reply with the next support step.";
+  return "Review request details, identify the next operational step, and reply with the clear next action.";
 }

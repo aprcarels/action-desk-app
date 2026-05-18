@@ -12,6 +12,7 @@ import type {
 type DetailActionBarProps = {
   thread: WorkflowThread;
   currentRep?: RepProfile;
+  assignableReps: RepProfile[];
   macros: MacroDefinition[];
   currentRepAvailable: boolean;
   hasExactOutlookLink: boolean;
@@ -21,6 +22,7 @@ type DetailActionBarProps = {
   onTakeThreadReasonChange: (reason: AssignmentReason) => void;
   onOpenInOutlook: () => void;
   onThreadStatusChange: (status: WorkflowStatus) => void;
+  onAssignThread: (repId: string) => void;
   onApplyMacro: (macroId: MacroId) => void;
   onLogReply: () => void;
   onJumpToNotes: () => void;
@@ -35,6 +37,7 @@ type DetailActionBarProps = {
 export function DetailActionBar({
   thread,
   currentRep,
+  assignableReps,
   macros,
   currentRepAvailable,
   hasExactOutlookLink,
@@ -44,6 +47,7 @@ export function DetailActionBar({
   onTakeThreadReasonChange,
   onOpenInOutlook,
   onThreadStatusChange,
+  onAssignThread,
   onApplyMacro,
   onLogReply,
   onJumpToNotes,
@@ -51,6 +55,12 @@ export function DetailActionBar({
   onUnsnooze,
   onTakeThread,
 }: DetailActionBarProps) {
+  const assignmentResolution = thread.assignmentResolution;
+  const assignmentSelectValue = assignmentResolution.primaryRepId ?? "";
+  const selectedRepMissing =
+    assignmentResolution.primaryRepId &&
+    !assignableReps.some((rep) => rep.id === assignmentResolution.primaryRepId);
+
   return (
     <div
       style={{
@@ -82,21 +92,48 @@ export function DetailActionBar({
           </span>
         </div>
         <div style={{ display: "grid", gap: "6px", justifyItems: "end" }}>
-          {canTakeThread && currentRep && (
-            <div style={{ display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" }}>
-              <select
-                value={takeThreadReason}
-                onChange={(event) =>
-                  onTakeThreadReasonChange(event.target.value as AssignmentReason)
+          <label style={{ display: "grid", gap: "4px", minWidth: "220px" }}>
+            <span style={eyebrowStyle}>Assignment</span>
+            <select
+              value={assignmentSelectValue}
+              onChange={(event) => {
+                if (event.target.value) {
+                  onAssignThread(event.target.value);
                 }
-                style={selectStyle}
-              >
-                {TAKE_THREAD_REASON_OPTIONS.map((reason) => (
-                  <option key={reason} value={reason}>
-                    {reason}
-                  </option>
-                ))}
-              </select>
+              }}
+              style={selectStyle}
+            >
+              {!assignmentSelectValue && <option value="">Unassigned</option>}
+              {selectedRepMissing && (
+                <option value={assignmentResolution.primaryRepId}>
+                  {assignmentResolution.primaryRepName ?? "Assigned Rep Missing"}
+                </option>
+              )}
+              {assignableReps.map((rep) => (
+                <option key={rep.id} value={rep.id}>
+                  {rep.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          {canTakeThread && currentRep && (
+            <div style={{ display: "flex", gap: "8px", alignItems: "end", flexWrap: "wrap" }}>
+              <label style={{ display: "grid", gap: "4px" }}>
+                <span style={eyebrowStyle}>Take Reason</span>
+                <select
+                  value={takeThreadReason}
+                  onChange={(event) =>
+                    onTakeThreadReasonChange(event.target.value as AssignmentReason)
+                  }
+                  style={selectStyle}
+                >
+                  {TAKE_THREAD_REASON_OPTIONS.map((reason) => (
+                    <option key={reason} value={reason}>
+                      {reason}
+                    </option>
+                  ))}
+                </select>
+              </label>
               <button
                 type="button"
                 onClick={() => onTakeThread(takeThreadReason)}
@@ -106,7 +143,9 @@ export function DetailActionBar({
               </button>
             </div>
           )}
-          {!canTakeThread && thread.assignedRepId === currentRep?.id && (
+          {!canTakeThread &&
+            currentRep &&
+            assignmentResolution.assignedRepIds.includes(currentRep.id) && (
             <span style={{ fontSize: "12px", fontWeight: 700, color: "#166534" }}>
               Assigned to you
             </span>

@@ -66,6 +66,10 @@ function startLoopbackAuthListener(options = {}) {
       res.end(callback.code ? successHtml : failureHtml);
 
       if (callback.error) {
+        logger?.warn?.("auth", "Microsoft auth callback returned an error.", {
+          error: callback.error,
+          error_description: callback.errorDescription || undefined,
+        });
         finalize(
           new Error(
             callback.errorDescription || "Microsoft sign-in returned an error.",

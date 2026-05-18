@@ -26,25 +26,53 @@ const DEFAULT_SLA_SETTINGS = {
   warningThresholdPercent: 75,
   warningMinutesBeforeBreach: 15,
 };
-const ACTION_DESK_LOCATION_IDS = new Set([
-  "apexpress-1",
-  "apexpress-2",
-  "worldpackusa",
-]);
-const ACTION_DESK_LOCATION_ALIASES = new Map([
-  ["apexpress 1", "apexpress-1"],
-  ["apexpress irwindale", "apexpress-1"],
-  ["ap express irwindale", "apexpress-1"],
-  ["irwindale", "apexpress-1"],
-  ["apexpress 2", "apexpress-2"],
-  ["apexpress corona", "apexpress-2"],
-  ["ap express corona", "apexpress-2"],
-  ["corona", "apexpress-2"],
-  ["worldpackusa", "worldpackusa"],
-  ["worldpackusa las vegas", "worldpackusa"],
-  ["worldpack usa las vegas", "worldpackusa"],
-  ["world pack usa las vegas", "worldpackusa"],
-]);
+
+function normalizeLocationKey(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function loadActionDeskLocationConfig() {
+  const configPath = path.resolve(
+    __dirname,
+    "..",
+    "src",
+    "config",
+    "actionDeskLocations.json",
+  );
+  const parsedConfig = JSON.parse(fs.readFileSync(configPath, "utf8"));
+  const locations = Array.isArray(parsedConfig?.locations)
+    ? parsedConfig.locations
+    : [];
+
+  if (locations.length === 0) {
+    throw new Error("Action Desk location config is missing locations.");
+  }
+
+  return locations.map((location) => ({
+    id: String(location.id || "").trim(),
+    name: String(location.name || "").trim(),
+    domain: String(location.domain || "").trim(),
+    aliases: Array.isArray(location.aliases)
+      ? location.aliases.map((alias) => String(alias || "").trim()).filter(Boolean)
+      : [],
+  })).filter((location) => location.id && location.name);
+}
+
+const ACTION_DESK_LOCATION_CONFIG = loadActionDeskLocationConfig();
+const ACTION_DESK_LOCATION_IDS = new Set(
+  ACTION_DESK_LOCATION_CONFIG.map((location) => location.id),
+);
+const ACTION_DESK_LOCATION_ALIASES = new Map();
+
+for (const location of ACTION_DESK_LOCATION_CONFIG) {
+  for (const alias of [location.id, location.name, ...location.aliases]) {
+    ACTION_DESK_LOCATION_ALIASES.set(normalizeLocationKey(alias), location.id);
+  }
+}
 const DEMO_USER_IDS = new Set(["rep-mj", "rep-ar", "rep-lc", "admin-sl"]);
 const DEMO_USER_EMAILS = new Set([
   "mia.johnson@actiondesk.local",
@@ -112,9 +140,11 @@ function normalizeLocationId(value) {
     return normalized;
   }
 
-  return ACTION_DESK_LOCATION_ALIASES.get(
-    normalized.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim(),
-  );
+  return ACTION_DESK_LOCATION_ALIASES.get(normalizeLocationKey(normalized));
+}
+
+function normalizeLocationIdOrNull(value) {
+  return normalizeLocationId(value) || null;
 }
 
 function isDemoDataEnabled(options = {}) {
@@ -369,12 +399,54 @@ function normalizeSlaSettings(settings) {
   };
 }
 
+function normalizeWorkflowStatus(value) {
+  if (
+    value === "new" ||
+    value === "in_progress" ||
+    value === "waiting_on_customer" ||
+    value === "resolved"
+  ) {
+    return value;
+  }
+
+  if (value === "open") {
+    return "new";
+  }
+
+  if (value === "assigned") {
+    return "in_progress";
+  }
+
+  if (value === "snoozed") {
+    return "waiting_on_customer";
+  }
+
+  return undefined;
+}
+
+function getDiagnosticThreadStatus(threadState) {
+  if (threadState?.status === "resolved") {
+    return "resolved";
+  }
+
+  if (threadState?.snooze) {
+    return "snoozed";
+  }
+
+  if (threadState?.manualAssignment || threadState?.autoAssignment) {
+    return "assigned";
+  }
+
+  return "open";
+}
+
 function normalizeThreadState(threadState) {
   return {
     locationId: normalizeLocationId(threadState?.locationId),
-    status: threadState?.status,
+    status: normalizeWorkflowStatus(threadState?.status),
     resolvedAt: normalizeText(threadState?.resolvedAt) || undefined,
     manualAssignment: threadState?.manualAssignment,
+    autoAssignment: threadState?.autoAssignment,
     assignmentHistory: Array.isArray(threadState?.assignmentHistory)
       ? threadState.assignmentHistory
       : [],
@@ -427,6 +499,7 @@ class SharedWorkflowStore {
     this.databasePath = filename;
     this.logger = options.logger;
     this.demoDataEnabled = isDemoDataEnabled(options);
+    this.runtimeSessions = new Map();
 
     try {
       this.database = new Database(filename);
@@ -595,6 +668,34 @@ class SharedWorkflowStore {
     if (!slaSettingsColumns.includes("location_id")) {
       this.database.exec(`ALTER TABLE workflow_sla_settings ADD COLUMN location_id TEXT`);
     }
+
+    this.migrateLocationIds();
+  }
+
+  migrateLocationIds() {
+    const tables = [
+      "rep_profiles",
+      "customer_settings",
+      "workflow_sla_settings",
+      "test_queue_emails",
+    ];
+
+    for (const table of tables) {
+      for (const location of ACTION_DESK_LOCATION_CONFIG) {
+        const aliases = location.aliases.filter((alias) => alias !== location.id);
+
+        if (aliases.length === 0) {
+          continue;
+        }
+
+        const placeholders = aliases.map(() => "?").join(", ");
+        this.database
+          .prepare(
+            `UPDATE ${table} SET location_id = ? WHERE location_id IN (${placeholders})`,
+          )
+          .run(location.id, ...aliases);
+      }
+    }
   }
 
   seedDemoUsers() {
@@ -607,7 +708,7 @@ class SharedWorkflowStore {
         initials: "MJ",
         email: "mia.johnson@actiondesk.local",
         role: "rep",
-        location_id: "apexpress-1",
+        location_id: "apexpress_irwindale",
         is_active: 1,
       },
       {
@@ -617,7 +718,7 @@ class SharedWorkflowStore {
         initials: "AR",
         email: "alex.rivera@actiondesk.local",
         role: "rep",
-        location_id: "apexpress-1",
+        location_id: "apexpress_irwindale",
         is_active: 1,
       },
       {
@@ -627,7 +728,7 @@ class SharedWorkflowStore {
         initials: "LC",
         email: "logan.chen@actiondesk.local",
         role: "supervisor",
-        location_id: "apexpress-1",
+        location_id: "apexpress_irwindale",
         is_active: 1,
       },
       {
@@ -690,7 +791,7 @@ class SharedWorkflowStore {
       initials: row.initials,
       email: row.email,
       role: normalizeRole(row.role),
-      locationId: row.location_id || undefined,
+      locationId: normalizeLocationId(row.location_id),
       isActive: row.is_active === 1,
     };
   }
@@ -774,7 +875,7 @@ class SharedWorkflowStore {
         initials: row.initials,
         email: row.email,
         role: normalizeRole(row.role),
-        locationId: row.location_id || undefined,
+        locationId: normalizeLocationId(row.location_id),
         isActive: row.is_active === 1,
         hasSignedIn: Boolean(row.entra_object_id),
         mappingStatus: row.entra_object_id ? "mapped" : "pending_first_sign_in",
@@ -902,7 +1003,7 @@ class SharedWorkflowStore {
     const nextInitials = normalizeInitials(payload?.initials, nextName, nextEmail);
     const nextLocationId =
       payload?.locationId === undefined
-        ? existing.location_id || null
+        ? normalizeLocationIdOrNull(existing.location_id)
         : normalizeLocationId(payload.locationId) || null;
     const now = new Date().toISOString();
     const didRoleChange = normalizeRole(existing.role) !== nextRole;
@@ -996,6 +1097,12 @@ class SharedWorkflowStore {
 
     if (!normalizedSessionId) {
       return null;
+    }
+
+    const runtimeUser = this.runtimeSessions.get(normalizedSessionId);
+
+    if (runtimeUser) {
+      return runtimeUser.isActive === false ? null : runtimeUser;
     }
 
     const row = this.database
@@ -1122,21 +1229,27 @@ class SharedWorkflowStore {
       return;
     }
 
+    const runtimeUser = this.runtimeSessions.get(normalizedSessionId);
     const sessionRecord = this.getSessionRecord(normalizedSessionId);
-
-    if (!sessionRecord) {
-      return;
-    }
 
     this.recordInvalidatedSession(normalizedSessionId, reason);
     this.authProvider?.signOutSession?.(normalizedSessionId);
-    this.clearThreadPresenceForUser(sessionRecord.rep_id);
+
+    if (runtimeUser) {
+      this.clearThreadPresenceForUser(runtimeUser.id);
+      this.runtimeSessions.delete(normalizedSessionId);
+    }
+
+    if (sessionRecord) {
+      this.clearThreadPresenceForUser(sessionRecord.rep_id);
+    }
+
     this.database
       .prepare(`DELETE FROM user_sessions WHERE session_id = ?`)
       .run(normalizedSessionId);
     this.logger?.warn("auth", "Cleared stale Action Desk session.", {
       sessionId: normalizedSessionId,
-      repId: sessionRecord.rep_id,
+      repId: runtimeUser?.id ?? sessionRecord?.rep_id,
       reason: normalizeSessionInvalidationReason(reason),
     });
   }
@@ -1239,8 +1352,142 @@ class SharedWorkflowStore {
     };
   }
 
-  logout(sessionId) {
+  startRuntimeSession(sessionId, repProfile) {
+    const normalizedSessionId = normalizeText(sessionId) || createId("session");
+    const repId = normalizeText(repProfile?.id);
+    const name = normalizeText(repProfile?.name);
+    const initials = normalizeInitials(repProfile?.initials, name, repProfile?.email);
+    const email = normalizeEmail(repProfile?.email);
+    const role = normalizeRole(repProfile?.role);
+    const locationId = normalizeLocationId(repProfile?.locationId);
+    const isActive = repProfile?.isActive !== false;
+
+    if (!repId || !name || !email) {
+      throw new Error("The backend user record was incomplete.");
+    }
+
+    const currentUser = {
+      id: repId,
+      name,
+      initials,
+      email,
+      role,
+      locationId,
+      isActive,
+    };
+
+    this.clearInvalidatedSessionState(normalizedSessionId);
+    this.runtimeSessions.set(normalizedSessionId, currentUser);
+
+    this.logger?.info("auth", "Backend session attached to local workflow shell.", {
+      repId: currentUser.id,
+      role: currentUser.role,
+      email: currentUser.email,
+    });
+
+    return {
+      sessionId: normalizedSessionId,
+      currentUser,
+      capabilities: getCapabilitiesForRole(currentUser.role),
+    };
+  }
+
+  startSessionForRepProfile(sessionId, repProfile) {
+    const normalizedSessionId = normalizeText(sessionId) || createId("session");
+    const repId = normalizeText(repProfile?.id);
+    const name = normalizeText(repProfile?.name);
+    const initials = normalizeInitials(repProfile?.initials, name, repProfile?.email);
+    const email = normalizeEmail(repProfile?.email);
+    const role = normalizeRole(repProfile?.role);
+    const locationId = normalizeLocationId(repProfile?.locationId) || null;
+
+    if (!repId || !name || !email) {
+      throw new Error("The backend user record was incomplete.");
+    }
+
+    const now = new Date().toISOString();
+    const existingByEmail = this.database
+      .prepare(`SELECT id FROM rep_profiles WHERE LOWER(email) = ?`)
+      .get(email);
+
+    const transaction = this.database.transaction(() => {
+      if (existingByEmail && existingByEmail.id !== repId) {
+        this.database
+          .prepare(`UPDATE user_sessions SET rep_id = ? WHERE rep_id = ?`)
+          .run(repId, existingByEmail.id);
+        this.database
+          .prepare(`UPDATE rep_profiles SET id = ? WHERE id = ?`)
+          .run(repId, existingByEmail.id);
+      }
+
+      this.database
+        .prepare(`
+          INSERT INTO rep_profiles (
+            id,
+            entra_object_id,
+            name,
+            initials,
+            email,
+            role,
+            location_id,
+            is_active,
+            created_at,
+            updated_at
+          )
+          VALUES (?, NULL, ?, ?, ?, ?, ?, 1, ?, ?)
+          ON CONFLICT(id) DO UPDATE SET
+            name = excluded.name,
+            initials = excluded.initials,
+            email = excluded.email,
+            role = excluded.role,
+            location_id = excluded.location_id,
+            is_active = 1,
+            updated_at = excluded.updated_at
+        `)
+        .run(repId, name, initials, email, role, locationId, now, now);
+
+      this.database
+        .prepare(`
+          INSERT INTO user_sessions (session_id, rep_id, created_at, updated_at)
+          VALUES (?, ?, ?, ?)
+          ON CONFLICT(session_id) DO UPDATE SET
+            rep_id = excluded.rep_id,
+            updated_at = excluded.updated_at
+        `)
+        .run(normalizedSessionId, repId, now, now);
+    });
+
+    this.clearInvalidatedSessionState(normalizedSessionId);
+    transaction();
+
+    const currentUser = this.getCurrentUser(normalizedSessionId);
+
+    this.logger?.info("auth", "Backend sign-in mapped to Action Desk user.", {
+      repId: currentUser?.id,
+      role: currentUser?.role,
+      email: currentUser?.email,
+    });
+
+    return {
+      sessionId: normalizedSessionId,
+      currentUser,
+      capabilities: currentUser ? getCapabilitiesForRole(currentUser.role) : [],
+    };
+  }
+
+  logout(sessionId, metadata = {}) {
+    const normalizedSessionId = normalizeText(sessionId);
+    const runtimeUser = this.runtimeSessions.get(normalizedSessionId);
     const sessionRecord = this.getSessionRecord(sessionId);
+    const reason =
+      normalizeText(metadata.reason) ||
+      normalizeText(metadata.source) ||
+      "explicitSignOut";
+
+    if (runtimeUser) {
+      this.clearThreadPresenceForUser(runtimeUser.id);
+      this.runtimeSessions.delete(normalizedSessionId);
+    }
 
     if (sessionRecord) {
       this.clearThreadPresenceForUser(sessionRecord.rep_id);
@@ -1250,11 +1497,13 @@ class SharedWorkflowStore {
 
     this.database
       .prepare(`DELETE FROM user_sessions WHERE session_id = ?`)
-      .run(normalizeText(sessionId));
+      .run(normalizedSessionId);
 
     this.logger?.info("auth", "Action Desk session signed out.", {
-      repId: sessionRecord?.rep_id,
-      sessionId: normalizeText(sessionId),
+      reason,
+      source: normalizeText(metadata.source) || undefined,
+      repId: runtimeUser?.id ?? sessionRecord?.rep_id,
+      sessionId: normalizedSessionId,
     });
   }
 
@@ -1414,7 +1663,7 @@ class SharedWorkflowStore {
           ownerRepId: primaryOwnerRepId,
           ownerRepIds: allOwnerRepIds,
           assignedCSRs,
-          locationId: row.location_id || undefined,
+          locationId: normalizeLocationId(row.location_id),
           updatedBy: row.updated_by_rep_id || undefined,
         };
       });
@@ -1423,7 +1672,7 @@ class SharedWorkflowStore {
   listCustomersForUser(currentUser) {
     const customers = this.listCustomers();
 
-    if (!currentUser || currentUser.role === "admin") {
+    if (!currentUser || currentUser.role === "admin" || currentUser.role === "supervisor") {
       return customers;
     }
 
@@ -1474,12 +1723,15 @@ class SharedWorkflowStore {
       : ownerRepRows[0] ?? null;
     const locationId =
       normalizedDraft.locationId ||
-      primaryOwnerRep?.location_id ||
+      normalizeLocationId(primaryOwnerRep?.location_id) ||
       (currentUser.role === "admin" ? undefined : currentUser.locationId);
 
     if (
       ownerRepRows.some(
-        (ownerRep) => ownerRep?.location_id && locationId && ownerRep.location_id !== locationId,
+        (ownerRep) =>
+          normalizeLocationId(ownerRep?.location_id) &&
+          locationId &&
+          normalizeLocationId(ownerRep?.location_id) !== locationId,
       )
     ) {
       throw new Error("Customer owners must belong to the selected location.");
@@ -1625,7 +1877,10 @@ class SharedWorkflowStore {
             return true;
           }
 
-          return !state.locationId || state.locationId === currentUser.locationId;
+          return (
+            !state.locationId ||
+            normalizeLocationId(state.locationId) === normalizeLocationId(currentUser.locationId)
+          );
         }),
     );
   }
@@ -1729,6 +1984,12 @@ class SharedWorkflowStore {
       .run(normalizedUserId);
   }
 
+  countWorkflowThreads() {
+    return this.database
+      .prepare(`SELECT COUNT(*) AS count FROM workflow_threads`)
+      .get().count;
+  }
+
   saveThreadState(sessionId, threadId, threadState) {
     const currentUser = this.requireCurrentUser(sessionId);
     const normalizedThreadId = normalizeText(threadId);
@@ -1753,11 +2014,14 @@ class SharedWorkflowStore {
       currentUser.role !== "admin" &&
       currentUser.locationId &&
       nextState.locationId &&
-      currentUser.locationId !== nextState.locationId
+      normalizeLocationId(currentUser.locationId) !== normalizeLocationId(nextState.locationId)
     ) {
       throw new Error("This workflow thread belongs to another Action Desk location.");
     }
     const now = new Date().toISOString();
+    const existingThread = this.database
+      .prepare(`SELECT thread_id FROM workflow_threads WHERE thread_id = ?`)
+      .get(normalizedThreadId);
 
     this.database
       .prepare(`
@@ -1768,6 +2032,16 @@ class SharedWorkflowStore {
           updated_at = excluded.updated_at
       `)
       .run(normalizedThreadId, JSON.stringify(nextState), now);
+
+    this.logger?.info("workflow", "Workflow thread state saved.", {
+      threadId: normalizedThreadId,
+      threadCreated: !existingThread,
+      threadSkipped: false,
+      skipReason: undefined,
+      status: getDiagnosticThreadStatus(nextState),
+      persistedThreadCount: this.countWorkflowThreads(),
+      updatedBy: currentUser.id,
+    });
 
     if (nextState.manualAssignment) {
       this.logger?.info("workflow", "Manual override saved.", {
@@ -1811,11 +2085,24 @@ class SharedWorkflowStore {
     `);
 
     const bindings = {};
+    const createdThreadIds = new Set();
+    const skippedReasons = new Map();
+
+    function recordSkip(skipReason) {
+      skippedReasons.set(skipReason, (skippedReasons.get(skipReason) || 0) + 1);
+    }
 
     for (const entry of Array.isArray(entries) ? entries : []) {
       const emailId = normalizeText(entry?.emailId);
 
       if (!emailId) {
+        recordSkip("missingEmailId");
+        this.logger?.warn("workflow", "Skipped workflow thread binding without email id.", {
+          threadCreated: false,
+          threadSkipped: true,
+          skipReason: "missingEmailId",
+          persistedThreadCount: this.countWorkflowThreads(),
+        });
         continue;
       }
 
@@ -1838,6 +2125,8 @@ class SharedWorkflowStore {
         existingByFallback?.workflow_thread_id ||
         conversationId ||
         createId("thread");
+      const threadCreated =
+        !existingByEmail && !existingByConversation && !existingByFallback;
       const now = new Date().toISOString();
 
       upsert.run({
@@ -1849,15 +2138,31 @@ class SharedWorkflowStore {
         updated_at: now,
       });
 
+      if (threadCreated) {
+        createdThreadIds.add(workflowThreadId);
+      }
+
       bindings[emailId] = workflowThreadId;
     }
+
+    this.logger?.info("workflow", "Workflow thread bindings synced.", {
+      requestedEmailCount: Array.isArray(entries) ? entries.length : 0,
+      boundEmailCount: Object.keys(bindings).length,
+      threadCreated: createdThreadIds.size,
+      threadSkipped: Array.from(skippedReasons.values()).reduce(
+        (total, count) => total + count,
+        0,
+      ),
+      skipReason: Object.fromEntries(skippedReasons.entries()),
+      persistedThreadCount: this.countWorkflowThreads(),
+    });
 
     return bindings;
   }
 
   buildTestQueueEmails(currentUser) {
     const now = Date.now();
-    const locations = ["apexpress-1", "apexpress-2", "worldpackusa"];
+    const locations = ACTION_DESK_LOCATION_CONFIG.map((location) => location.id);
     const scenarios = [
       {
         key: "where-order",

@@ -5,10 +5,34 @@ import {
   hasCaseIdentifiers,
 } from "./caseIdentifiers";
 
+export type ReplyGenerationContext = {
+  subject?: string;
+  senderName?: string;
+  senderEmail?: string;
+  body?: string;
+  bodyPreview?: string;
+  summary?: string;
+  customerName?: string;
+  threadItemCount?: number;
+};
+
+export type ReplyUnavailableReason =
+  | "internal_alert"
+  | "non_customer_work"
+  | "reply_not_needed"
+  | "not_action_required"
+  | "unclear_request";
+
+type GenerateReplyOptions = {
+  allowDeterministicFallback?: boolean;
+  context?: ReplyGenerationContext;
+};
+
 type ReplyBuilderContext = {
   analysis: EmailAnalysis;
   order?: OrderContext;
   referenceLabel?: string;
+  generationContext?: ReplyGenerationContext;
 };
 
 const DEFAULT_GREETING = "Hi,";
@@ -18,54 +42,143 @@ const MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "S
 export function generateReply(
   analysis: EmailAnalysis,
   order?: OrderContext,
+  options?: GenerateReplyOptions,
 ): string {
-  if (!shouldGenerateReply(analysis)) {
-    return "";
-  }
-
+  const unavailableReason = getReplyUnavailableReason(analysis);
   const referenceLabel = getIdentifierReferenceLabel(analysis);
   const context: ReplyBuilderContext = {
     analysis,
     order,
     referenceLabel,
+    generationContext: options?.context,
   };
+
+  if (unavailableReason) {
+    return options?.allowDeterministicFallback &&
+      shouldUseDeterministicFallbackReply(
+        analysis,
+        options.context,
+        unavailableReason,
+        order,
+      )
+      ? buildDeterministicFallbackReply(context)
+      : "";
+  }
 
   if (needsMissingInfoReply(analysis, order)) {
     return buildMissingInfoReply(context);
   }
 
+  let replyDraft: string;
+
   switch (analysis.intent) {
     case "where_is_my_order":
-      return buildOrderStatusReply(context);
+      replyDraft = buildOrderStatusReply(context);
+      break;
     case "pod_request":
-      return buildPodReply(context);
+      replyDraft = buildPodReply(context);
+      break;
     case "cancellation_request":
-      return buildCancellationReply(context);
+      replyDraft = buildCancellationReply(context);
+      break;
     case "short_shipment":
-      return buildShortShipmentReply(context);
+      replyDraft = buildShortShipmentReply(context);
+      break;
     case "damaged_shipment":
-      return buildDamagedShipmentReply(context);
+      replyDraft = buildDamagedShipmentReply(context);
+      break;
     case "address_change":
-      return buildAddressChangeReply(context);
+      replyDraft = buildAddressChangeReply(context);
+      break;
     case "billing_question":
-      return buildBillingReply(context);
+      replyDraft = buildBillingReply(context);
+      break;
     case "operational_confirmation":
-      return buildOperationalConfirmationReply(context);
+      replyDraft = buildOperationalConfirmationReply(context);
+      break;
     case "general_support":
     default:
-      return buildGeneralSupportReply(context);
+      replyDraft = buildGeneralSupportReply(context);
+      break;
   }
+
+  return replyDraft.trim() ||
+    (options?.allowDeterministicFallback &&
+    shouldUseDeterministicFallbackReply(analysis, options.context, null, order)
+      ? buildDeterministicFallbackReply(context)
+      : "");
 }
 
-function shouldGenerateReply(analysis: EmailAnalysis): boolean {
-  return !(
-    (analysis.workType && analysis.workType !== "customer_support") ||
-    analysis.actionability !== "action_required" ||
-    !analysis.hasClearRequest ||
-    (analysis.isThreadContinuation && !analysis.hasClearRequest) ||
-    analysis.replyNeeded === "no" ||
-    analysis.messageType === "internal_alert"
+export function getReplyUnavailableReason(
+  analysis: EmailAnalysis,
+): ReplyUnavailableReason | null {
+  if (analysis.messageType === "internal_alert") {
+    return "internal_alert";
+  }
+
+  if (analysis.workType && analysis.workType !== "customer_support") {
+    return "non_customer_work";
+  }
+
+  if (analysis.messageType === "awareness_only") {
+    return "reply_not_needed";
+  }
+
+  if (analysis.replyNeeded === "no") {
+    return "reply_not_needed";
+  }
+
+  if (analysis.messageType === "informational") {
+    return "not_action_required";
+  }
+
+  if (analysis.actionability && analysis.actionability !== "action_required") {
+    return "not_action_required";
+  }
+
+  if (analysis.hasClearRequest === false) {
+    return "unclear_request";
+  }
+
+  return null;
+}
+
+function shouldUseDeterministicFallbackReply(
+  analysis: EmailAnalysis,
+  context: ReplyGenerationContext | undefined,
+  unavailableReason: ReplyUnavailableReason | null,
+  order?: OrderContext,
+): boolean {
+  if (
+    unavailableReason === "internal_alert" ||
+    unavailableReason === "non_customer_work" ||
+    unavailableReason === "reply_not_needed"
+  ) {
+    return false;
+  }
+
+  if (
+    unavailableReason === "not_action_required" &&
+    analysis.actionability &&
+    analysis.actionability !== "review_needed"
+  ) {
+    return false;
+  }
+
+  return Boolean(
+    order ||
+      hasCaseIdentifiers(analysis) ||
+      getIdentifierReferenceLabel(analysis) ||
+      hasContextText(context?.subject) ||
+      hasContextText(context?.body) ||
+      hasContextText(context?.bodyPreview) ||
+      hasContextText(context?.summary) ||
+      hasContextText(context?.customerName),
   );
+}
+
+function hasContextText(value?: string): boolean {
+  return Boolean(value?.trim());
 }
 
 function needsMissingInfoReply(analysis: EmailAnalysis, order?: OrderContext): boolean {
@@ -89,16 +202,132 @@ function needsMissingInfoReply(analysis: EmailAnalysis, order?: OrderContext): b
   return false;
 }
 
-function buildGreeting(): string {
-  return DEFAULT_GREETING;
+function buildGreeting(context?: ReplyGenerationContext): string {
+  const firstName = getSafeFirstName(context?.senderName);
+
+  return firstName ? `Hi ${firstName},` : DEFAULT_GREETING;
 }
 
 function buildClose(): string {
   return DEFAULT_CLOSE;
 }
 
-function buildReply(sentences: string[]): string {
-  return [buildGreeting(), sentences.join(" "), buildClose()].join("\n\n");
+function buildReply(
+  sentences: string[],
+  context?: ReplyGenerationContext,
+): string {
+  return [buildGreeting(context), sentences.join(" "), buildClose()].join("\n\n");
+}
+
+function buildDeterministicFallbackReply({
+  analysis,
+  order,
+  referenceLabel,
+  generationContext,
+}: ReplyBuilderContext): string {
+  const subjectReference = getSubjectReference(generationContext?.subject);
+  const customerReference = getCustomerReference(generationContext?.customerName);
+  const requestReference = customerReference || subjectReference || "from your message";
+  const sentences: string[] = [
+    `I can help review the request ${requestReference}.`,
+  ];
+
+  if (order) {
+    sentences.push(
+      `Order ${order.orderNumber} is currently ${order.status}, and the shipment is ${order.shipmentStatus}${buildLastUpdatedClause(order.lastUpdated)}.`,
+    );
+  } else if (referenceLabel) {
+    sentences.push(
+      `I have ${referenceLabel}, and I will use that to check the available case details.`,
+    );
+  }
+
+  sentences.push(buildFallbackNextStep(analysis, Boolean(order || referenceLabel)));
+
+  return buildReply(sentences, generationContext);
+}
+
+function buildFallbackNextStep(
+  analysis: EmailAnalysis,
+  hasReferenceContext: boolean,
+): string {
+  switch (analysis.intent) {
+    case "where_is_my_order":
+      return hasReferenceContext
+        ? "I will confirm the latest shipment detail and follow up with the next update."
+        : "If you have an order number or tracking number, please send it over so I can confirm the latest shipment detail.";
+    case "pod_request":
+      return hasReferenceContext
+        ? "I will check the delivery record and send the proof-of-delivery details if they are available."
+        : "If you have an order number or delivery reference, please send it over so I can match the delivery record.";
+    case "cancellation_request":
+      return hasReferenceContext
+        ? "I will review whether the order can still be stopped and follow up with the next step."
+        : "If you have the order number, please send it over so I can confirm whether cancellation is still possible.";
+    case "short_shipment":
+      return "I will compare the shipment details with the reported missing items and follow up with the next step.";
+    case "damaged_shipment":
+      return "Please send a photo of the damage if you have one, and I will review the next step from there.";
+    case "address_change":
+      return "Please send the full corrected address exactly as it should appear, and I will confirm what can still be updated.";
+    case "billing_question":
+      return "I will review the billing details and follow up with the next step once I can verify the charge.";
+    case "operational_confirmation":
+      return "I will monitor the requested operational step and send a confirmation once it is completed.";
+    case "general_support":
+    default:
+      return "I will review the available details and follow up with the next step.";
+  }
+}
+
+function getSubjectReference(subject?: string): string {
+  const normalizedSubject = normalizeInlineText(subject);
+
+  if (!normalizedSubject) {
+    return "";
+  }
+
+  return `about "${truncateText(normalizedSubject, 80)}"`;
+}
+
+function getCustomerReference(customerName?: string): string {
+  const normalizedCustomerName = normalizeInlineText(customerName);
+
+  return normalizedCustomerName
+    ? `for ${truncateText(normalizedCustomerName, 80)}`
+    : "";
+}
+
+function normalizeInlineText(value?: string): string {
+  return value?.replace(/\s+/g, " ").trim() ?? "";
+}
+
+function truncateText(value: string, maxLength: number): string {
+  return value.length > maxLength ? `${value.slice(0, maxLength - 1)}...` : value;
+}
+
+function getSafeFirstName(senderName?: string): string {
+  const normalizedName = normalizeInlineText(senderName);
+
+  if (
+    !normalizedName ||
+    normalizedName.includes("@") ||
+    /\b(unknown|support|team|noreply|no-reply|notification|admin)\b/i.test(
+      normalizedName,
+    )
+  ) {
+    return "";
+  }
+
+  const firstName = normalizedName
+    .split(/\s+/)[0]
+    .replace(/[^a-z'-]/gi, "");
+
+  if (firstName.length < 2 || firstName.length > 24) {
+    return "";
+  }
+
+  return `${firstName.charAt(0).toUpperCase()}${firstName.slice(1)}`;
 }
 
 function buildMissingInfoReply({ analysis }: ReplyBuilderContext): string {

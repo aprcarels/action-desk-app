@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   classifyWorkType,
+  isLowValueSystemReportEmail,
   normalizeProcessedEmailResult,
   shouldShowInCustomerServiceQueue,
 } from "./customerServiceMail";
@@ -330,6 +331,35 @@ describe("customerServiceMail", () => {
     );
 
     expect(normalized.analysis.workType).toBe("system");
+    expect(
+      shouldShowInCustomerServiceQueue(buildProcessedEmail(email, normalized)),
+    ).toBe(false);
+  });
+
+  it("deprioritizes AP Express systems tracking summary reports", () => {
+    const email = buildEmail({
+      senderName: "AP Express Systems",
+      senderEmail: "systems@apexpress.com",
+      subject: "OutboundYesterdayTracking_Summary",
+      body: "Subject: OutboundYesterdayTracking_Summary\nSender: AP Express Systems",
+      previewText: "OutboundYesterdayTracking_Summary",
+    });
+
+    const normalized = normalizeProcessedEmailResult(email, buildResult({
+      analysis: {
+        ...buildResult().analysis,
+        intent: "where_is_my_order",
+        orderNumber: undefined,
+        risks: [],
+        hasClearRequest: false,
+        summary: "Tracking report summary.",
+        nextAction: "Review the report.",
+      },
+    }));
+
+    expect(isLowValueSystemReportEmail(email)).toBe(true);
+    expect(normalized.analysis.workType).toBe("system");
+    expect(normalized.analysis.replyNeeded).toBe("no");
     expect(
       shouldShowInCustomerServiceQueue(buildProcessedEmail(email, normalized)),
     ).toBe(false);

@@ -3,16 +3,17 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.getAccessToken = getAccessToken;
 const msal_browser_1 = require("@azure/msal-browser");
 const msalConfig_1 = require("./msalConfig");
-let msalClientPromise = null;
-let accessTokenPromise = null;
-let loginPopupPromise = null;
 const MISSING_AUTH_CONFIGURATION_MESSAGE = "Microsoft mailbox access is not configured. Add VITE_AZURE_CLIENT_ID and VITE_AZURE_TENANT_ID or VITE_AZURE_AUTHORITY.";
 const SIGN_IN_FAILED_MESSAGE = "Microsoft sign-in could not be completed. Please sign in again and allow Mail.Read access.";
 const TOKEN_ACQUISITION_FAILED_MESSAGE = "Microsoft mailbox access could not be authorized right now. Please try again.";
 const SIGN_IN_ALREADY_IN_PROGRESS_MESSAGE = "Microsoft sign-in is already in progress. Please finish the open sign-in popup and try again if needed.";
 const SIGN_IN_REQUIRED_MESSAGE = "Sign in to Microsoft to load your live inbox.";
+let msalClientPromise = null;
+let accessTokenPromise = null;
+let loginPopupPromise = null;
 function isNoTokenRequestCacheError(error) {
-    return error instanceof msal_browser_1.BrowserAuthError && error.errorCode === msal_browser_1.BrowserAuthErrorCodes.noTokenRequestCacheError;
+    return (error instanceof msal_browser_1.BrowserAuthError &&
+        error.errorCode === msal_browser_1.BrowserAuthErrorCodes.noTokenRequestCacheError);
 }
 function isUserCancelledAuthError(error) {
     return (error instanceof msal_browser_1.BrowserAuthError &&
@@ -25,13 +26,15 @@ function isInteractionInProgressError(error) {
 }
 async function handleRedirectResponse(client) {
     try {
-        return await client.handleRedirectPromise();
+        const redirectResponse = await client.handleRedirectPromise();
+        if (redirectResponse?.account) {
+            client.setActiveAccount(redirectResponse.account);
+        }
     }
     catch (error) {
-        if (isNoTokenRequestCacheError(error)) {
-            return null;
+        if (!isNoTokenRequestCacheError(error)) {
+            throw error;
         }
-        throw error;
     }
 }
 async function getMsalClient() {
@@ -45,10 +48,7 @@ async function getMsalClient() {
         }
         const client = new msal_browser_1.PublicClientApplication((0, msalConfig_1.createMsalConfiguration)(runtimeConfig));
         await client.initialize();
-        const redirectResponse = await handleRedirectResponse(client);
-        if (redirectResponse?.account) {
-            client.setActiveAccount(redirectResponse.account);
-        }
+        await handleRedirectResponse(client);
         const existingAccount = client.getActiveAccount() ?? client.getAllAccounts()[0] ?? null;
         if (existingAccount) {
             client.setActiveAccount(existingAccount);
@@ -70,7 +70,12 @@ async function ensureSignedIn(client) {
         return existingAccount;
     }
     if (!loginPopupPromise) {
-        loginPopupPromise = client.loginPopup((0, msalConfig_1.createMailReadPopupRequest)());
+        const popupRequest = (0, msalConfig_1.createMailReadPopupRequest)();
+        console.info("[auth] starting loginPopup", {
+            redirectUri: popupRequest.redirectUri,
+            origin: typeof window !== "undefined" ? window.location.origin : undefined,
+        });
+        loginPopupPromise = client.loginPopup(popupRequest);
     }
     try {
         const loginResponse = await loginPopupPromise;
@@ -108,7 +113,7 @@ async function getAccessTokenInternal(options) {
     if (!existingAccount && options?.interactive !== true) {
         throw new Error(SIGN_IN_REQUIRED_MESSAGE);
     }
-    const account = existingAccount ?? await ensureSignedIn(client);
+    const account = existingAccount ?? (await ensureSignedIn(client));
     client.setActiveAccount(account);
     try {
         const tokenResponse = await client.acquireTokenSilent((0, msalConfig_1.createMailReadSilentRequest)(account));

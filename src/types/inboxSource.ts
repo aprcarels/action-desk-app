@@ -19,9 +19,11 @@ export type RawInboxEmail = {
   fromName: string;
   fromEmail: string;
   receivedAt: string;
+  sentAt?: string;
   bodyText: string;
   bodyHtml?: string;
   previewText?: string;
+  hasAttachments?: boolean;
   outlookWebLink?: string;
   toRecipients?: string[];
   ccRecipients?: string[];

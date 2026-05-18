@@ -1,12 +1,19 @@
 import { AssignmentBadge } from "./AssignmentBadge";
 import { StatusPill } from "./StatusPill";
 import { getIntentLabel } from "../services/analysisTaxonomy";
+import { ASSIGNED_REP_MISSING_LABEL } from "../services/assignmentLogic";
 import {
   formatElapsedTime,
   getPrimarySlaDisplayState,
   getSlaStateLabel,
   getSlaStateStyle,
 } from "../services/sla";
+import { getPriorityExplanationSummary } from "../services/priorityExplanation";
+import { getAnalysisSourceDisclosure } from "../services/sourceDisclosure";
+import {
+  isSuppressibleSystemReportMissingBodyFailure,
+  isSystemReportEmailItem,
+} from "../services/systemReportEmail";
 import type {
   AssignmentReason,
   WorkflowThread,
@@ -75,7 +82,19 @@ export function ThreadedQueueCard({
 }: ThreadedQueueCardProps) {
   const representativeItem = thread.representativeItem;
   const analysis = representativeItem.result?.analysis;
-  const isFailed = representativeItem.status === "failed";
+  const analysisSourceDisclosure = getAnalysisSourceDisclosure(
+    representativeItem.result?.analysisSource,
+  );
+  const priorityExplanationSummary = getPriorityExplanationSummary({
+    item: representativeItem,
+    thread,
+    maxReasons: 4,
+  });
+  const isSuppressedSystemReportFailure =
+    isSuppressibleSystemReportMissingBodyFailure(representativeItem);
+  const isSystemReport = isSystemReportEmailItem(representativeItem);
+  const isFailed =
+    representativeItem.status === "failed" && !isSuppressedSystemReportFailure;
   const isRetrying = retryingEmailId === representativeItem.email.id;
   const presence =
     [...thread.activePresenceRecords]
@@ -98,18 +117,21 @@ export function ThreadedQueueCard({
   const customerAssignedRepNames = thread.customerAssignedRepNames?.filter(
     (name) => name.trim().length > 0,
   );
+  const assignmentResolution = thread.assignmentResolution;
   const assignmentBadgeNames =
-    thread.assignmentType === "manual"
-      ? thread.assignedRepName
-        ? [thread.assignedRepName]
+    assignmentResolution.assignmentSource === "manual"
+      ? assignmentResolution.primaryRepName
+        ? [assignmentResolution.primaryRepName]
         : undefined
       : customerAssignedRepNames && customerAssignedRepNames.length > 0
         ? customerAssignedRepNames
-        : thread.assignedRepName
-          ? [thread.assignedRepName]
+        : assignmentResolution.primaryRepName
+          ? [assignmentResolution.primaryRepName]
           : undefined;
   const displayAssignedRepName =
-    thread.assignedRepName ?? assignmentBadgeNames?.[0];
+    assignmentResolution.primaryRepName ??
+    assignmentBadgeNames?.[0] ??
+    (assignmentResolution.primaryRepId ? ASSIGNED_REP_MISSING_LABEL : undefined);
   const displayAssignedRepInitials =
     thread.assignedRepInitials ?? thread.customerAssignedRepInitials?.[0];
   const displayAssignmentType =
@@ -128,6 +150,11 @@ export function ThreadedQueueCard({
         type="button"
         onClick={onSelect}
         aria-pressed={isSelected}
+        title={
+          priorityExplanationSummary
+            ? `Why prioritized: ${priorityExplanationSummary}`
+            : undefined
+        }
         style={{
           width: "100%",
           border: `1px solid ${isSelected ? "#93c5fd" : accent.borderColor}`,
@@ -168,7 +195,7 @@ export function ThreadedQueueCard({
               >
                 {thread.title}
               </span>
-              {!displayAssignedRepName && (
+              {assignmentResolution.assignmentStatus === "unassigned" && (
                 <span
                   style={{
                     fontSize: "11px",
@@ -277,6 +304,9 @@ export function ThreadedQueueCard({
             <>
               <span style={badgeStyle}>{analysis.urgency} urgency</span>
               <span style={badgeStyle}>{getIntentLabel(analysis.intent)}</span>
+              <span title={analysisSourceDisclosure.detail} style={badgeStyle}>
+                {analysisSourceDisclosure.label}
+              </span>
             </>
           )}
           <span
@@ -299,6 +329,17 @@ export function ThreadedQueueCard({
               }}
             >
               {thread.representativeItem.customerMatch.customerName}
+            </span>
+          )}
+          {isSystemReport && (
+            <span
+              style={{
+                ...badgeStyle,
+                backgroundColor: "#f1f5f9",
+                color: "#475569",
+              }}
+            >
+              System report
             </span>
           )}
           {isFailed && (
@@ -327,12 +368,16 @@ export function ThreadedQueueCard({
             {thread.subtitle}
           </div>
           <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-            {currentRepId && thread.assignedRepId !== currentRepId && (
+            {currentRepId && !assignmentResolution.assignedRepIds.includes(currentRepId) && (
               <button
                 type="button"
                 onClick={(event) => {
                   event.stopPropagation();
-                  onTakeThread(thread.assignedRepId ? "Covering for colleague" : "Unassigned");
+                  onTakeThread(
+                    assignmentResolution.assignmentStatus === "unassigned"
+                      ? "Unassigned"
+                      : "Covering for colleague",
+                  );
                 }}
                 style={secondaryButtonStyle}
               >

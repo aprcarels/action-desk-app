@@ -97,6 +97,8 @@ describe("sharedAuthPolicy", () => {
     expect(getCapabilitiesForRole("rep")).not.toContain("manage_sla_settings");
     expect(getCapabilitiesForRole("supervisor")).toContain("manage_sla_settings");
     expect(getCapabilitiesForRole("admin")).toContain("manage_sla_settings");
+    expect(getCapabilitiesForRole("admin")).toContain("view_supervisor_queue");
+    expect(getCapabilitiesForRole("admin")).toContain("view_all_work");
     expect(getCapabilitiesForRole("admin")).toContain("manage_test_queue_data");
     expect(getCapabilitiesForRole("supervisor")).not.toContain("manage_users");
     expect(getCapabilitiesForRole("rep")).not.toContain("manage_users");

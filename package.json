@@ -17,9 +17,11 @@
     "build:all": "npm run build && npm run build:electron",
     "rebuild:native": "electron-rebuild -f -w better-sqlite3",
     "desktop:prep": "npm run build:electron && npm run rebuild:native",
+    "ensure:test-native": "node scripts/ensure-node-better-sqlite3.cjs",
     "lint": "eslint .",
     "pack:desktop": "npm run build:all && electron-builder --dir",
     "package:win": "npm run build:all && electron-builder --win nsis",
+    "pretest": "npm run ensure:test-native",
     "test": "vitest run",
     "preview": "vite preview"
   },
@@ -53,24 +55,29 @@
     "vitest": "^4.1.2"
   },
   "build": {
-    "appId": "com.actiondesk.desktop",
-    "productName": "Action Desk",
-    "directories": {
-      "output": "release"
-    },
+  "appId": "com.actiondesk.desktop",
+  "productName": "Action Desk",
+  "icon": "build/icon.ico",
+  "directories": {
+    "output": "release",
+    "buildResources": "build"
+  },
     "files": [
-  "dist/**/*",
-  "dist-electron/**/*",
-  "electron/**/*",
-  "package.json",
-  ".env"
-],
+      "dist/**/*",
+      "dist-electron/**/*",
+      "electron/**/*",
+      "src/config/actionDeskLocations.json",
+      "package.json",
+      "!**/.env",
+      "!**/.env.*"
+    ],
     "asar": true,
     "asarUnpack": [
       "node_modules/better-sqlite3/**/*"
     ],
     "npmRebuild": true,
     "win": {
+      "icon": "build/icon.ico",
       "target": [
         {
           "target": "nsis",

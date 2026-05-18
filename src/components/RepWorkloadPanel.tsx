@@ -25,6 +25,7 @@ export function RepWorkloadPanel({
   defaultCollapsed = true,
 }: RepWorkloadPanelProps) {
   const [isOpen, setIsOpen] = useState(!defaultCollapsed);
+  const safeWorkloads = Array.isArray(workloads) ? workloads : [];
 
   return (
     <div
@@ -98,7 +99,7 @@ export function RepWorkloadPanel({
               </tr>
             </thead>
             <tbody>
-              {workloads.map((workload) => (
+              {safeWorkloads.map((workload) => (
                 <tr key={workload.repId}>
                   <td style={bodyCellStyle}>
                     <strong>{workload.repName}</strong>
@@ -106,6 +107,11 @@ export function RepWorkloadPanel({
                       {" "}
                       ({workload.repRole === "admin" ? "Admin" : workload.repRole === "supervisor" ? "Supervisor" : "Rep"})
                     </span>
+                    {workload.repEmail && (
+                      <div style={{ marginTop: "3px", color: "#64748b", fontSize: "12px" }}>
+                        {workload.repEmail}
+                      </div>
+                    )}
                   </td>
                   <td style={bodyCellStyle}>{workload.openThreadCount}</td>
                   <td style={bodyCellStyle}>{workload.waitingOnCustomerCount}</td>

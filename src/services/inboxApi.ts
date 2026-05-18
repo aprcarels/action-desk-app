@@ -83,6 +83,8 @@ function isRawInboxEmail(value: unknown): value is RawInboxEmail {
     (candidate.locationId === undefined || typeof candidate.locationId === "string") &&
     (candidate.bodyHtml === undefined || typeof candidate.bodyHtml === "string") &&
     (candidate.previewText === undefined || typeof candidate.previewText === "string") &&
+    (candidate.hasAttachments === undefined ||
+      typeof candidate.hasAttachments === "boolean") &&
     (candidate.outlookWebLink === undefined ||
       typeof candidate.outlookWebLink === "string") &&
     (candidate.toRecipients === undefined ||

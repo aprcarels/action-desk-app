@@ -9,11 +9,16 @@ import {
   canCurrentUserTakeThread,
   getDefaultTakeThreadReason,
 } from "../services/manualAssignment";
+import { canAccessLocation } from "../services/locations";
 import {
   getOutlookOpenTarget,
   hasExactOutlookMessageLink,
 } from "../services/openInOutlook";
 import { getQueueAgeInfo } from "../services/queueAging";
+import {
+  isSuppressibleSystemReportMissingBodyFailure,
+  isSystemReportEmailItem,
+} from "../services/systemReportEmail";
 import type { MacroDefinition, MacroId } from "../services/macros";
 import type {
   AssignmentReason,
@@ -51,7 +56,7 @@ type EmailDetailProps = {
     onNext: () => void;
   };
   onBackToQueue?: () => void;
-  onCopyReply: () => void;
+  onCopyReply: () => boolean | Promise<boolean>;
   onCopyCaseForReview: () => void;
   onCopyRawCaseJson: () => void;
   onRegenerateReply: () => void;
@@ -65,6 +70,7 @@ type EmailDetailProps = {
   ) => void;
   onUnsnoozeThread: (threadId: string) => void;
   onTakeThread: (threadId: string, reason: AssignmentReason) => void;
+  onAssignThread: (threadId: string, repId: string) => void;
   onApplyMacro: (threadId: string, macroId: MacroId) => void;
   onRecomputePriority: () => void;
   onMarkPilotItemActive: () => void;
@@ -143,6 +149,7 @@ export function EmailDetail({
   onSnoozeThread,
   onUnsnoozeThread,
   onTakeThread,
+  onAssignThread,
   onApplyMacro,
   onRecomputePriority,
   onMarkPilotItemActive,
@@ -187,10 +194,74 @@ export function EmailDetail({
     setOutlookStatusMessage(null);
   }, [item?.email.id]);
 
+  const isSystemReport = item ? isSystemReportEmailItem(item) : false;
+  const suppressMissingBodyFailure = item
+    ? isSuppressibleSystemReportMissingBodyFailure(item)
+    : false;
+
+  useEffect(() => {
+    if (!item || !isSystemReport) {
+      return;
+    }
+
+    console.info("[Action Desk diagnostics] renderedSystemReportEmail", {
+      emailId: item.email.id,
+      senderEmail: item.email.senderEmail,
+      subject: item.email.subject,
+      status: item.status,
+      workType: item.result?.analysis.workType,
+    });
+  }, [
+    isSystemReport,
+    item?.email.id,
+    item?.email.senderEmail,
+    item?.email.subject,
+    item?.result?.analysis.workType,
+    item?.status,
+  ]);
+
+  useEffect(() => {
+    if (!item || !suppressMissingBodyFailure) {
+      return;
+    }
+
+    console.info("[Action Desk diagnostics] suppressedMissingBodyFailure", {
+      emailId: item.email.id,
+      senderEmail: item.email.senderEmail,
+      subject: item.email.subject,
+      processingError: item.processingError,
+    });
+  }, [
+    item?.email.id,
+    item?.email.senderEmail,
+    item?.email.subject,
+    item?.processingError,
+    suppressMissingBodyFailure,
+  ]);
+
   if (!item) {
     return renderStateCard(
       "Support Workspace",
       "Select a queue item to review the conversation, draft the response, and update the workflow context.",
+    );
+  }
+
+  if (suppressMissingBodyFailure) {
+    return renderStateCard(
+      item.email.subject,
+      <>
+        <p style={{ margin: 0 }}>
+          <strong>Sender:</strong> {item.email.senderName} ({item.email.senderEmail})
+        </p>
+        <p style={{ margin: "8px 0 0" }}>
+          System/report email. No customer-service analysis or reply is needed.
+        </p>
+        <pre style={{ ...bodyBlockStyle, marginTop: "16px" }}>
+          {item.email.body.trim() || item.email.previewText?.trim() ||
+            "No readable message body was provided by Outlook for this system report."}
+        </pre>
+      </>,
+      "#475569",
     );
   }
 
@@ -234,8 +305,28 @@ export function EmailDetail({
     );
   }
 
+  const currentItem = item;
   const hasExactOutlookLink = hasExactOutlookMessageLink(item);
   const canTakeThread = canCurrentUserTakeThread(thread, currentRep);
+  const assignableReps = reps.filter((rep) => {
+    if (rep.role !== "rep" || rep.isActive === false) {
+      return false;
+    }
+
+    if (!currentRep) {
+      return false;
+    }
+
+    if (currentRep.role === "admin") {
+      return true;
+    }
+
+    if (currentRep.role === "supervisor") {
+      return canAccessLocation(currentRep, rep.locationId);
+    }
+
+    return rep.id === currentRep.id;
+  });
   const queueAge = getQueueAgeInfo({
     receivedAt: thread.oldestReceivedAt,
     pilotItemState: pilotMode ? pilotItemState : undefined,
@@ -248,6 +339,40 @@ export function EmailDetail({
           presence.presenceType === "working" ? "actively working" : "viewing"
         } this thread`
     : undefined;
+
+  function openCurrentItemInOutlook(options?: { draftCopied?: boolean }) {
+    const outlookTarget = getOutlookOpenTarget(currentItem);
+
+    if (outlookTarget.type === "missing_exact_link") {
+      setOutlookStatusMessage(
+        options?.draftCopied
+          ? `Reply draft copied, but ${outlookTarget.message}`
+          : outlookTarget.message,
+      );
+      return false;
+    }
+
+    setOutlookStatusMessage(null);
+    window.open(outlookTarget.url, "_blank", "noopener,noreferrer");
+    return true;
+  }
+
+  async function copyReplyAndOpenOutlook() {
+    if (!hasReplyDraft) {
+      return;
+    }
+
+    const copied = await onCopyReply();
+
+    if (!copied) {
+      setOutlookStatusMessage(
+        "Reply draft could not be copied. Outlook was not opened because there is no draft on your clipboard.",
+      );
+      return;
+    }
+
+    openCurrentItemInOutlook({ draftCopied: true });
+  }
 
   function jumpToNotes() {
     setNotesOpen(true);
@@ -371,6 +496,7 @@ export function EmailDetail({
         <DetailActionBar
           thread={thread}
           currentRep={currentRep}
+          assignableReps={assignableReps}
           macros={macros}
           currentRepAvailable={Boolean(currentRep)}
           hasExactOutlookLink={hasExactOutlookLink}
@@ -379,17 +505,10 @@ export function EmailDetail({
           takeThreadReason={takeThreadReason}
           onTakeThreadReasonChange={setTakeThreadReason}
           onOpenInOutlook={() => {
-            const outlookTarget = getOutlookOpenTarget(item);
-
-            if (outlookTarget.type === "missing_exact_link") {
-              setOutlookStatusMessage(outlookTarget.message);
-              return;
-            }
-
-            setOutlookStatusMessage(null);
-            window.open(outlookTarget.url, "_blank", "noopener,noreferrer");
+            openCurrentItemInOutlook();
           }}
           onThreadStatusChange={(status) => onThreadStatusChange(thread.id, status)}
+          onAssignThread={(repId) => onAssignThread(thread.id, repId)}
           onApplyMacro={(macroId) => onApplyMacro(thread.id, macroId)}
           onLogReply={() => onLogReply(thread.id)}
           onJumpToNotes={jumpToNotes}
@@ -432,8 +551,10 @@ export function EmailDetail({
               onReplyHistoryOpenChange={setReplyHistoryOpen}
               onOlderMessagesOpenChange={setOlderMessagesOpen}
               onCopyReply={onCopyReply}
+              onCopyReplyAndOpenOutlook={copyReplyAndOpenOutlook}
               onCopyCaseForReview={onCopyCaseForReview}
               onCopyRawCaseJson={onCopyRawCaseJson}
+              canOpenOutlook={hasExactOutlookLink}
               showDebugActions={showDebugActions}
               onRegenerateReply={onRegenerateReply}
               onAddInternalNote={(body) => onAddInternalNote(thread.id, body)}

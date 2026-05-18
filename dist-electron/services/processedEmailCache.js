@@ -2,12 +2,14 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.getCachedProcessedEmail = getCachedProcessedEmail;
 exports.setCachedProcessedEmail = setCachedProcessedEmail;
+exports.updateProcessedEmailCache = updateProcessedEmailCache;
 exports.clearProcessedEmailCache = clearProcessedEmailCache;
 const processedEmailCache = new Map();
 function cloneProcessedEmail(item) {
     return {
         ...item,
         email: { ...item.email },
+        customerMatch: item.customerMatch ? { ...item.customerMatch } : undefined,
         result: item.result
             ? {
                 ...item.result,
@@ -34,6 +36,16 @@ function setCachedProcessedEmail(item) {
         return;
     }
     processedEmailCache.set(item.email.id, cloneProcessedEmail(item));
+}
+function updateProcessedEmailCache(updater) {
+    for (const [id, item] of processedEmailCache.entries()) {
+        const nextItem = updater(cloneProcessedEmail(item));
+        if (nextItem.status !== "processed" || !nextItem.result) {
+            processedEmailCache.delete(id);
+            continue;
+        }
+        processedEmailCache.set(id, cloneProcessedEmail(nextItem));
+    }
 }
 function clearProcessedEmailCache() {
     processedEmailCache.clear();

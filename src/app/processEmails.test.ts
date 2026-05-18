@@ -1,10 +1,69 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  DEFAULT_EMAIL_PROCESSING_CONCURRENCY,
   filterProcessedEmails,
+  processEmails,
+  processEmailsProgressively,
   rematchLoadedQueueItems,
   sortProcessedEmails,
 } from "./processEmails";
-import type { ProcessedEmail, SavedCustomer } from "../types/actionDesk";
+import * as actionDeskRunner from "./runActionDesk";
+import type {
+  ActionDeskResult,
+  EmailItem,
+  ProcessedEmail,
+  SavedCustomer,
+} from "../types/actionDesk";
+
+function buildEmailItem(index: number): EmailItem {
+  return {
+    id: `email-${index}`,
+    senderName: `Customer ${index}`,
+    senderEmail: `customer-${index}@example.com`,
+    subject: `Where is order ${index}?`,
+    receivedAt: `2026-04-01T10:00:${String(index).padStart(2, "0")}Z`,
+    body: `Please help with ORD-${1000 + index}.`,
+    previewText: `Please help with ORD-${1000 + index}.`,
+    provider: "outlook_graph",
+    source: "outlook_graph",
+  };
+}
+
+function buildActionDeskResult(index: number): ActionDeskResult {
+  return {
+    analysis: {
+      summary: `Customer ${index} is requesting an order update.`,
+      intent: "where_is_my_order",
+      urgency: "medium",
+      confidence: "medium",
+      orderNumber: `ORD-${1000 + index}`,
+      risks: [],
+      nextAction: "Verify the latest shipment status.",
+      messageType: "customer_request",
+      actionability: "action_required",
+      replyNeeded: "yes",
+      workType: "customer_support",
+      hasClearRequest: true,
+      isThreadContinuation: false,
+    },
+    analysisSource: "fallback",
+    replyDraft: "Hello",
+    priorityScore: 60,
+  };
+}
+
+function getOrderIndexFromAnalysisInput(input: string): number {
+  const match = input.match(/ORD-(\d+)/);
+  const orderNumber = match ? Number(match[1]) : 1000;
+
+  return orderNumber - 1000;
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, milliseconds);
+  });
+}
 
 function buildProcessedEmail(overrides?: Partial<ProcessedEmail>): ProcessedEmail {
   return {
@@ -118,6 +177,67 @@ describe("filterProcessedEmails", () => {
     expect(filtered).toHaveLength(2);
   });
 
+  it("suppresses missing-body system report failures from the customer-service view", () => {
+    const systemReportFailure = buildProcessedEmail({
+      email: {
+        ...buildProcessedEmail().email,
+        id: "system-report",
+        senderName: "AP Express Systems",
+        senderEmail: "systems@apexpress.com",
+        subject: "OutboundYesterdayTracking_Summary",
+        body: "",
+        previewText: "",
+      },
+      status: "failed",
+      result: undefined,
+      processingError: "This email could not be analyzed because the body is missing.",
+      previewText: "",
+    });
+    const customerMissingBodyFailure = buildProcessedEmail({
+      email: {
+        ...buildProcessedEmail().email,
+        id: "customer-missing-body",
+        senderEmail: "customer@example.com",
+        subject: "Need help",
+        body: "",
+        previewText: "",
+      },
+      status: "failed",
+      result: undefined,
+      processingError: "This email could not be analyzed because the body is missing.",
+      previewText: "",
+    });
+
+    const customerServiceItems = filterProcessedEmails(
+      [systemReportFailure, customerMissingBodyFailure],
+      {
+        searchQuery: "",
+        urgency: "all",
+        intent: "all",
+        customerPriority: "all",
+        queueView: "customer_service",
+      },
+    );
+    const allInboxItems = filterProcessedEmails(
+      [systemReportFailure, customerMissingBodyFailure],
+      {
+        searchQuery: "",
+        urgency: "all",
+        intent: "all",
+        customerPriority: "all",
+        queueView: "all_inbox",
+      },
+    );
+
+    expect(customerServiceItems.map((item) => item.email.id)).toEqual([
+      "customer-missing-body",
+    ]);
+    expect(allInboxItems.map((item) => item.email.id)).toEqual([
+      "system-report",
+      "customer-missing-body",
+    ]);
+  });
+
   it("can filter to matched customer emails only", () => {
     const items = [
       buildProcessedEmail({
@@ -129,7 +249,7 @@ describe("filterProcessedEmails", () => {
         customerMatch: {
           customerId: "customer-1",
           customerName: "Acme",
-          matchedOn: "sender_email",
+          matchedOn: "email",
           matchedValue: "customer@example.com",
         },
       }),
@@ -151,6 +271,130 @@ describe("filterProcessedEmails", () => {
 
     expect(filtered).toHaveLength(1);
     expect(filtered[0].email.id).toBe("email-priority");
+  });
+});
+
+describe("processEmails", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("uses subject and sender fallback for empty-body Graph system reports", async () => {
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => undefined);
+
+    const processedItems = await processEmails([
+      {
+        id: "msg-system-report",
+        senderName: "AP Express Systems",
+        senderEmail: "systems@apexpress.com",
+        subject: "OutboundYesterdayTracking_Summary",
+        receivedAt: "2026-04-01T10:00:00Z",
+        body: "",
+        previewText: "",
+        provider: "outlook_graph",
+        source: "outlook_graph",
+      },
+    ]);
+
+    expect(processedItems).toHaveLength(1);
+    expect(processedItems[0]).toMatchObject({
+      status: "processed",
+      email: {
+        body: expect.stringContaining("OutboundYesterdayTracking_Summary"),
+      },
+      result: {
+        analysis: {
+          workType: "system",
+          replyNeeded: "no",
+        },
+      },
+    });
+    expect(
+      filterProcessedEmails(processedItems, {
+        searchQuery: "",
+        urgency: "all",
+        intent: "all",
+        customerPriority: "all",
+        queueView: "customer_service",
+      }),
+    ).toEqual([]);
+    expect(infoSpy).toHaveBeenCalledWith(
+      "[Action Desk diagnostics] missing body fallback",
+      expect.objectContaining({
+        reason: "systemReportEmail",
+        emailId: "msg-system-report",
+        senderEmail: "systems@apexpress.com",
+      }),
+    );
+  });
+
+  it("limits batch processing concurrency", async () => {
+    const emails = Array.from({ length: 12 }, (_, index) =>
+      buildEmailItem(index + 1),
+    );
+    let activeCount = 0;
+    let maxActiveCount = 0;
+    const runSpy = vi
+      .spyOn(actionDeskRunner, "runActionDesk")
+      .mockImplementation(async (input) => {
+        activeCount += 1;
+        maxActiveCount = Math.max(maxActiveCount, activeCount);
+
+        try {
+          await delay(5);
+          return buildActionDeskResult(getOrderIndexFromAnalysisInput(input));
+        } finally {
+          activeCount -= 1;
+        }
+      });
+
+    const processedItems = await processEmails(emails);
+
+    expect(DEFAULT_EMAIL_PROCESSING_CONCURRENCY).toBe(4);
+    expect(runSpy).toHaveBeenCalledTimes(emails.length);
+    expect(maxActiveCount).toBeLessThanOrEqual(
+      DEFAULT_EMAIL_PROCESSING_CONCURRENCY,
+    );
+    expect(processedItems).toHaveLength(emails.length);
+    expect(processedItems.every((item) => item.status === "processed")).toBe(
+      true,
+    );
+  });
+
+  it("keeps progressive callbacks while limiting concurrency", async () => {
+    const emails = Array.from({ length: 12 }, (_, index) =>
+      buildEmailItem(index + 1),
+    );
+    const onItemProcessed = vi.fn();
+    let activeCount = 0;
+    let maxActiveCount = 0;
+    const runSpy = vi
+      .spyOn(actionDeskRunner, "runActionDesk")
+      .mockImplementation(async (input) => {
+        activeCount += 1;
+        maxActiveCount = Math.max(maxActiveCount, activeCount);
+
+        try {
+          await delay(5);
+          return buildActionDeskResult(getOrderIndexFromAnalysisInput(input));
+        } finally {
+          activeCount -= 1;
+        }
+      });
+
+    const result = await processEmailsProgressively(emails, {
+      onItemProcessed,
+    });
+
+    expect(DEFAULT_EMAIL_PROCESSING_CONCURRENCY).toBe(4);
+    expect(runSpy).toHaveBeenCalledTimes(emails.length);
+    expect(maxActiveCount).toBeLessThanOrEqual(
+      DEFAULT_EMAIL_PROCESSING_CONCURRENCY,
+    );
+    expect(onItemProcessed).toHaveBeenCalledTimes(emails.length);
+    expect(result.processedCount).toBe(emails.length);
+    expect(result.failedCount).toBe(0);
+    expect(result.processedItems).toHaveLength(emails.length);
   });
 });
 
@@ -190,7 +434,7 @@ describe("sortProcessedEmails", () => {
         customerMatch: {
           customerId: "customer-1",
           customerName: "Acme",
-          matchedOn: "sender_email",
+          matchedOn: "email",
           matchedValue: "customer@example.com",
         },
       }),
@@ -250,7 +494,7 @@ describe("rematchLoadedQueueItems", () => {
       customerMatch: {
         customerId: "customer-1",
         customerName: "Acme",
-        matchedOn: "sender_email",
+        matchedOn: "domain",
       },
       result: {
         priorityScore: 88,

@@ -132,6 +132,9 @@ export function InboxQueue({
   onIntentFilterChange,
   onCustomerPriorityFilterChange,
 }: InboxQueueProps) {
+  const refreshDisabled = isLoadingInbox || isLoadingMore;
+  const loadMoreDisabled = isLoadingMore || isLoadingInbox;
+
   const containerStyle: React.CSSProperties = {
     backgroundColor: "#ffffff",
     border: "1px solid #d8e1ec",
@@ -366,15 +369,19 @@ export function InboxQueue({
             <button
               type="button"
               onClick={onRefreshInbox}
-              disabled={isLoadingInbox}
+              disabled={refreshDisabled}
               style={{
                 ...secondaryButtonStyle,
-                backgroundColor: isLoadingInbox ? "#e2e8f0" : "#ffffff",
-                color: isLoadingInbox ? "#64748b" : "#0f172a",
-                cursor: isLoadingInbox ? "not-allowed" : "pointer",
+                backgroundColor: refreshDisabled ? "#e2e8f0" : "#ffffff",
+                color: refreshDisabled ? "#64748b" : "#0f172a",
+                cursor: refreshDisabled ? "not-allowed" : "pointer",
               }}
             >
-              {isLoadingInbox ? "Refreshing Queue..." : "Refresh Queue"}
+              {isLoadingInbox
+                ? "Refreshing Queue..."
+                : isLoadingMore
+                  ? "Loading More..."
+                  : "Refresh Queue"}
             </button>
           </div>
         </div>
@@ -570,15 +577,19 @@ export function InboxQueue({
             <button
               type="button"
               onClick={onLoadMore}
-              disabled={isLoadingMore}
+              disabled={loadMoreDisabled}
               style={{
                 ...secondaryButtonStyle,
-                backgroundColor: isLoadingMore ? "#e2e8f0" : "#ffffff",
-                color: isLoadingMore ? "#64748b" : "#0f172a",
-                cursor: isLoadingMore ? "not-allowed" : "pointer",
+                backgroundColor: loadMoreDisabled ? "#e2e8f0" : "#ffffff",
+                color: loadMoreDisabled ? "#64748b" : "#0f172a",
+                cursor: loadMoreDisabled ? "not-allowed" : "pointer",
               }}
             >
-              {isLoadingMore ? "Loading More..." : "Load More"}
+              {isLoadingMore
+                ? "Loading More..."
+                : isLoadingInbox
+                  ? "Refreshing Queue..."
+                  : "Load More"}
             </button>
           )}
         </div>

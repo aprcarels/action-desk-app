@@ -1,9 +1,24 @@
 import * as mariadb from "mariadb";
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
 import { config as loadDotEnv } from "dotenv";
 import type { Buffer } from "node:buffer";
 import type { Pool, PoolConfig, PoolConnection, SqlError, UpsertResult } from "mariadb";
 
-loadDotEnv();
+const envPaths = [
+  resolve(process.cwd(), ".env"),
+  resolve(process.cwd(), "..", ".env"),
+  resolve(__dirname, "..", "..", "..", ".env"),
+  resolve(__dirname, "..", "..", "..", "..", ".env"),
+  resolve(__dirname, "..", "..", "..", "..", "..", ".env"),
+];
+
+for (const envPath of envPaths) {
+  if (existsSync(envPath)) {
+    loadDotEnv({ path: envPath });
+    break;
+  }
+}
 
 const REQUIRED_DATABASE_ENV_KEYS = [
   "DB_HOST",
@@ -236,8 +251,9 @@ async function queryWithExecutor<T extends DatabaseRow = DatabaseRow>(
     }
 
     const details = extractErrorDetails(error);
-    databaseLogger.error("database", "Database query failed.", details);
-    throw new DatabaseQueryError(details, error);
+databaseLogger.error("database", "Database query failed.", details);
+console.error("[ACTION DESK RAW DB ERROR]", error);
+throw error;
   }
 }
 
@@ -263,8 +279,9 @@ async function executeWithExecutor(
     }
 
     const details = extractErrorDetails(error);
-    databaseLogger.error("database", "Database query failed.", details);
-    throw new DatabaseQueryError(details, error);
+databaseLogger.error("database", "Database query failed.", details);
+console.error("[ACTION DESK RAW DB ERROR]", error);
+throw error;
   }
 }
 

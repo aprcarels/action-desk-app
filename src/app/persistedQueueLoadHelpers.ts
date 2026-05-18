@@ -33,6 +33,8 @@ type BackgroundChunkHandlerOptions = {
 type HeadStartLoadOptions = {
   service: QueueApplicationService;
   interactiveAuth?: boolean;
+  useHeadStart?: boolean;
+  selectFirstItem?: boolean;
   setQueueItems: (items: ProcessedEmail[]) => void;
   setNextCursor: (value: string | undefined) => void;
   setLastLoadedAt: (value: string | undefined) => void;
@@ -134,23 +136,29 @@ export async function runPersistedInitialLoad(
     setIsLoadingInbox,
     setLoading,
     isMounted,
+    useHeadStart = true,
+    selectFirstItem = true,
   } = options;
 
-  const queueResult = await service.loadAndProcessInboxWithHeadStart({
-    interactiveAuth,
-    initialCount: 10,
-    batchSize: 5,
-    onBackgroundChunkProcessed: async (payload) => {
-      applyPersistedBackgroundChunk({
-        isMounted,
-        payload,
-        setQueueItems,
-        setNextCursor,
-        setLastLoadedAt,
-        setProcessingStatus,
+  const queueResult = useHeadStart
+    ? await service.loadAndProcessInboxWithHeadStart({
+        interactiveAuth,
+        initialCount: 10,
+        batchSize: 5,
+        onBackgroundChunkProcessed: async (payload) => {
+          applyPersistedBackgroundChunk({
+            isMounted,
+            payload,
+            setQueueItems,
+            setNextCursor,
+            setLastLoadedAt,
+            setProcessingStatus,
+          });
+        },
+      })
+    : await service.loadAndProcessInbox({
+        interactiveAuth,
       });
-    },
-  });
 
   if (!isMounted) {
     return null;
@@ -159,11 +167,11 @@ export async function runPersistedInitialLoad(
   applyPersistedQueueProjection({
     processedItems: queueResult.processedItems,
     nextCursor: queueResult.nextCursor,
-    selectFirstItem: true,
+    selectFirstItem,
     processingMessage:
-      (queueResult.processedItems?.length ?? 0) < 10
-        ? null
-        : "Loading more inbox emails in the background.",
+      useHeadStart && (queueResult.processedItems?.length ?? 0) >= 10
+        ? "Loading more inbox emails in the background."
+        : null,
     setQueueItems,
     setNextCursor,
     setLastLoadedAt,

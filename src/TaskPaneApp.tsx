@@ -4,6 +4,10 @@ import { useOutlookShellContext } from "./office/useOutlookShellContext";
 import { getIntentLabel, getRiskLabel } from "./services/analysisTaxonomy";
 import { buildAnalysisInput } from "./services/analysisInput";
 import { cleanEmailText } from "./services/cleanEmailText";
+import {
+  getAnalysisSourceDisclosure,
+  getDraftSourceDisclosure,
+} from "./services/sourceDisclosure";
 import type { ActionDeskResult } from "./types/actionDesk";
 
 type TaskPaneState =
@@ -201,6 +205,18 @@ export default function TaskPaneApp() {
     color: "#334155",
   };
 
+  const sourceDisclosureBadgeStyle: React.CSSProperties = {
+    display: "inline-flex",
+    width: "fit-content",
+    margin: "0 0 10px",
+    fontSize: "12px",
+    fontWeight: 700,
+    color: "#475569",
+    backgroundColor: "#f1f5f9",
+    borderRadius: "999px",
+    padding: "5px 9px",
+  };
+
   const bodyBlockStyle: React.CSSProperties = {
     margin: 0,
     padding: "14px",
@@ -303,7 +319,7 @@ export default function TaskPaneApp() {
 
         {taskPaneState.status === "loading" && (
           <div style={cardStyle}>
-            <p style={textStyle}>Processing the current email and generating Action Desk output.</p>
+            <p style={textStyle}>Processing the current email and preparing Action Desk output.</p>
           </div>
         )}
 
@@ -327,6 +343,12 @@ export default function TaskPaneApp() {
           <>
             <div style={cardStyle}>
               <h2 style={sectionTitleStyle}>Summary</h2>
+              <span
+                title={getAnalysisSourceDisclosure(taskPaneState.result.analysisSource).detail}
+                style={sourceDisclosureBadgeStyle}
+              >
+                Analysis: {getAnalysisSourceDisclosure(taskPaneState.result.analysisSource).label}
+              </span>
               <p style={textStyle}>
                 {taskPaneState.result.analysis.summary || "No summary available."}
               </p>
@@ -352,6 +374,12 @@ export default function TaskPaneApp() {
                 }}
               >
                 <h2 style={{ ...sectionTitleStyle, margin: 0 }}>Reply Draft</h2>
+                <span
+                  title={getDraftSourceDisclosure(taskPaneState.result.analysisSource).detail}
+                  style={sourceDisclosureBadgeStyle}
+                >
+                  Draft: {getDraftSourceDisclosure(taskPaneState.result.analysisSource).label}
+                </span>
                 <button
                   type="button"
                   onClick={handleCopyReplyDraft}
@@ -396,6 +424,10 @@ export default function TaskPaneApp() {
 
             <div style={cardStyle}>
               <h2 style={sectionTitleStyle}>Analysis Details</h2>
+              <p style={textStyle}>
+                <strong>Source:</strong>{" "}
+                {getAnalysisSourceDisclosure(taskPaneState.result.analysisSource).label}
+              </p>
               <p style={textStyle}>
                 <strong>Intent:</strong> {getIntentLabel(taskPaneState.result.analysis.intent)}
               </p>

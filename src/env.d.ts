@@ -1,4 +1,5 @@
 interface ImportMetaEnv {
+  readonly ACTION_DESK_API_URL?: string;
   readonly ACTION_DESK_ENABLE_DEMO_DATA?: "true" | "false";
   readonly VITE_INBOX_SOURCE?: "dev" | "api";
   readonly VITE_PILOT_MODE?: "true" | "false";

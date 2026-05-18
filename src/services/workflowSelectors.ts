@@ -1,4 +1,8 @@
-import { getEffectiveAssignment } from "./assignmentLogic";
+import {
+  ASSIGNED_REP_MISSING_LABEL,
+  getAssignmentRecordFromResolution,
+  resolveCanonicalAssignment,
+} from "./assignmentLogic";
 import {
   buildThreadSla,
   getDefaultSlaSettings,
@@ -10,12 +14,10 @@ import {
 import { getActiveThreadPresence, isThreadPresenceActive } from "./threadPresence";
 import { createBaseWorkflowThreads, getSenderThreadGroupKey } from "./threadGrouping";
 import { canAccessLocation, normalizeLocationId } from "./locations";
-import {
-  getCustomerOwnerRepIds,
-  getCustomerPrimaryOwnerId,
-} from "./customerSettings";
-import { applyCustomerPriorityToEmail } from "./customerMatching";
+import { getCustomerPrimaryOwnerId, getEmailDomain } from "./customerSettings";
+import { applyCustomerPriorityToEmails } from "./customerMatching";
 import type {
+  AssignmentResolution,
   ProcessedEmail,
   QueueScopeView,
   RepProfile,
@@ -27,6 +29,13 @@ import type {
   WorkflowStatusFilter,
   WorkflowThread,
 } from "../types/actionDesk";
+
+const SHARED_CSR_MAILBOX_EMAILS = new Set(["ecomcsr@apexpress.com"]);
+const INTERNAL_CSR_DOMAINS = new Set([
+  "actiondesk.local",
+  "apexpress.com",
+  "worldpackusa.com",
+]);
 
 export type WorkflowMetrics = {
   totalOpen: number;
@@ -42,6 +51,7 @@ export type WorkflowMetrics = {
 export type RepWorkloadSummary = {
   repId: string;
   repName: string;
+  repEmail: string;
   repRole: RepProfile["role"];
   openThreadCount: number;
   waitingOnCustomerCount: number;
@@ -102,6 +112,70 @@ function getTimestamp(value?: string): number {
 
   const timestamp = Date.parse(value);
   return Number.isNaN(timestamp) ? 0 : timestamp;
+}
+
+function normalizeEmail(value: unknown): string {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
+
+function getEmailActivityTimestamp(item: ProcessedEmail): number {
+  return getTimestamp(item.email.sentAt ?? item.email.receivedAt);
+}
+
+function isInternalCsrEmail(email: unknown, reps: RepProfile[]): boolean {
+  const normalizedEmail = normalizeEmail(email);
+
+  if (!normalizedEmail) {
+    return false;
+  }
+
+  if (SHARED_CSR_MAILBOX_EMAILS.has(normalizedEmail)) {
+    return true;
+  }
+
+  if (reps.some((rep) => normalizeEmail(rep.email) === normalizedEmail)) {
+    return true;
+  }
+
+  return INTERNAL_CSR_DOMAINS.has(getEmailDomain(normalizedEmail));
+}
+
+function hasExternalRecipient(item: ProcessedEmail, reps: RepProfile[]): boolean {
+  return [...(item.email.toRecipients ?? []), ...(item.email.ccRecipients ?? [])].some(
+    (recipient) => !isInternalCsrEmail(recipient, reps),
+  );
+}
+
+function getFirstDetectedCsrReplyAt(
+  items: ProcessedEmail[],
+  reps: RepProfile[],
+): string | undefined {
+  const firstExternalCustomerTimestamp = Math.min(
+    ...items
+      .filter((item) => !isInternalCsrEmail(item.email.senderEmail, reps))
+      .map((item) => getTimestamp(item.email.receivedAt))
+      .filter((timestamp) => timestamp > 0),
+  );
+  const hasExternalCustomerMessage = Number.isFinite(firstExternalCustomerTimestamp);
+  const replyCandidates = items
+    .filter((item) => {
+      if (!isInternalCsrEmail(item.email.senderEmail, reps)) {
+        return false;
+      }
+
+      if (hasExternalRecipient(item, reps)) {
+        return true;
+      }
+
+      if (!hasExternalCustomerMessage) {
+        return false;
+      }
+
+      return getEmailActivityTimestamp(item) >= firstExternalCustomerTimestamp;
+    })
+    .sort((left, right) => getEmailActivityTimestamp(left) - getEmailActivityTimestamp(right));
+
+  return replyCandidates[0]?.email.sentAt ?? replyCandidates[0]?.email.receivedAt;
 }
 
 function isThreadResolved(thread: WorkflowThread): boolean {
@@ -213,10 +287,13 @@ function matchesQueueScope(
   }
 
   if (safeQueueScopeView === "unassigned") {
-    return !thread.assignedRepId;
+    return thread.assignmentResolution.assignmentStatus === "unassigned";
   }
 
-  return thread.assignedRepId === currentRep.id || !thread.assignedRepId;
+  return (
+    thread.assignmentResolution.assignedRepIds.includes(currentRep.id) ||
+    thread.assignmentResolution.assignmentStatus === "unassigned"
+  );
 }
 
 function matchesLocationScope(thread: WorkflowThread, currentRep: RepProfile): boolean {
@@ -250,72 +327,50 @@ function applyCustomerSettingsToFeedItems(
   items: ProcessedEmail[],
   customers: SavedCustomer[],
 ): ProcessedEmail[] {
-  if (customers.length === 0) {
+  const safeCustomers = Array.isArray(customers) ? customers : [];
+
+  if (safeCustomers.length === 0) {
     return items;
   }
 
-  return items.map((item) => applyCustomerPriorityToEmail(item, customers));
-}
-
-function resolveMatchedCustomer(
-  item: ProcessedEmail,
-  customers: SavedCustomer[],
-): SavedCustomer | undefined {
-  if (!item.customerMatch?.customerId) {
-    return undefined;
+  try {
+    return applyCustomerPriorityToEmails(items, safeCustomers);
+  } catch (error) {
+    console.error("EMAIL PROCESSING FAILED", {
+      failureReason: "customer_match_failed",
+      errorName: error instanceof Error ? error.name : typeof error,
+      errorMessage: error instanceof Error ? error.message : String(error),
+      errorStack: error instanceof Error ? error.stack : undefined,
+    });
+    return items;
   }
-
-  return customers.find(
-    (customer) => customer.id === item.customerMatch?.customerId,
-  );
 }
 
-function getCustomerAssignedRepIds(
-  item: ProcessedEmail,
-  customers: SavedCustomer[],
-): string[] {
-  const matchedCustomer = resolveMatchedCustomer(item, customers);
-  const primaryOwnerRepId = matchedCustomer
-    ? getCustomerPrimaryOwnerId(matchedCustomer)
-    : item.customerMatch?.ownerRepId;
-  const ownerRepIds = matchedCustomer
-    ? getCustomerOwnerRepIds(matchedCustomer)
-    : item.customerMatch?.ownerRepIds ?? (primaryOwnerRepId ? [primaryOwnerRepId] : []);
-
-  return Array.from(
-    new Set(
-      [
-        primaryOwnerRepId,
-        ...ownerRepIds,
-      ].filter((repId): repId is string => Boolean(repId)),
-    ),
-  );
-}
-
-function getCustomerAssignedRepDisplay(
-  item: ProcessedEmail,
-  customers: SavedCustomer[],
-  reps: RepProfile[],
-): {
-  ids: string[];
-  names: string[];
-  initials: string[];
-} {
-  const ids = getCustomerAssignedRepIds(item, customers);
-
+function getFallbackAssignmentResolution(): AssignmentResolution {
   return {
-    ids,
-    names: ids.map((repId) => {
-      const rep = reps.find((candidate) => candidate.id === repId);
-
-      return rep?.name ?? "Unknown Rep";
-    }),
-    initials: ids.map((repId) => {
-      const rep = reps.find((candidate) => candidate.id === repId);
-
-      return rep?.initials ?? "";
-    }),
+    assignmentStatus: "unassigned",
+    assignmentSource: "none",
+    assignedRepIds: [],
+    assignedRepNames: [],
+    matchType: "none",
   };
+}
+
+function logAssignmentLookupFailure(
+  thread: Pick<WorkflowThread, "representativeItem">,
+  error: unknown,
+) {
+  console.error("EMAIL PROCESSING FAILED", {
+    emailId: thread.representativeItem.email.id,
+    subject: thread.representativeItem.email.subject,
+    senderName: thread.representativeItem.email.senderName,
+    senderEmail: thread.representativeItem.email.senderEmail,
+    receivedAt: thread.representativeItem.email.receivedAt,
+    failureReason: "assignment_lookup_failed",
+    errorName: error instanceof Error ? error.name : typeof error,
+    errorMessage: error instanceof Error ? error.message : String(error),
+    errorStack: error instanceof Error ? error.stack : undefined,
+  });
 }
 
 function matchesSearch(thread: WorkflowThread, searchQuery: string): boolean {
@@ -387,21 +442,32 @@ export function buildWorkflowThreads(options: {
       const threadState =
         workflowState.threadStates[thread.id] ??
         selectFallbackThreadState(workflowState, thread);
-      const currentAssignment = getEffectiveAssignment(
-        threadState,
+      let assignmentResolution: AssignmentResolution;
+
+      try {
+        assignmentResolution = resolveCanonicalAssignment({
+          threadState,
+          representativeItem: thread.representativeItem,
+          customers,
+          reps: workflowState.reps,
+        });
+      } catch (error) {
+        logAssignmentLookupFailure(thread, error);
+        assignmentResolution = getFallbackAssignmentResolution();
+      }
+      const currentAssignment = getAssignmentRecordFromResolution(
+        assignmentResolution,
         thread.representativeItem,
-        customers,
-        workflowState.reps,
-        assignmentLoadByRepId,
+        threadState,
       );
-      if (currentAssignment?.assignedRepId) {
+      if (assignmentResolution.primaryRepId) {
         assignmentLoadByRepId.set(
-          currentAssignment.assignedRepId,
-          (assignmentLoadByRepId.get(currentAssignment.assignedRepId) ?? 0) + 1,
+          assignmentResolution.primaryRepId,
+          (assignmentLoadByRepId.get(assignmentResolution.primaryRepId) ?? 0) + 1,
         );
       }
       const assignedRep = workflowState.reps.find(
-        (rep) => rep.id === currentAssignment?.assignedRepId,
+        (rep) => rep.id === assignmentResolution.primaryRepId,
       );
       const locationId =
         resolveCustomerLocation(thread.representativeItem, customers, workflowState.reps) ??
@@ -413,9 +479,24 @@ export function buildWorkflowThreads(options: {
       const sortedReplyLog = [...(threadState?.replyLog ?? [])].sort(
         (left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt),
       );
-      const firstReplyAt = sortedReplyLog[0]?.createdAt;
-      const latestReplyAt = sortedReplyLog[sortedReplyLog.length - 1]?.createdAt;
-      const latestActivityAt = latestReplyAt || thread.latestReceivedAt;
+      const firstLoggedReplyAt = sortedReplyLog[0]?.createdAt;
+      const detectedFirstReplyAt = getFirstDetectedCsrReplyAt(
+        thread.items,
+        workflowState.reps,
+      );
+      const firstReplyAt = firstLoggedReplyAt ?? detectedFirstReplyAt;
+      const latestReplyAt =
+        sortedReplyLog[sortedReplyLog.length - 1]?.createdAt ??
+        detectedFirstReplyAt;
+      const latestActivityAt =
+        getTimestamp(latestReplyAt) > getTimestamp(thread.latestReceivedAt)
+          ? latestReplyAt!
+          : thread.latestReceivedAt;
+      const firstReplySource: WorkflowThread["firstReplySource"] = firstLoggedReplyAt
+        ? "logged"
+        : detectedFirstReplyAt
+          ? "thread"
+          : undefined;
       const resolvedAt = threadState?.resolvedAt;
       const sla = buildThreadSla({
         receivedAt: thread.oldestReceivedAt,
@@ -435,23 +516,22 @@ export function buildWorkflowThreads(options: {
       const activePresenceRecords = threadPresenceRecords.filter((presence) =>
         isThreadPresenceActive(presence, now),
       );
-      const customerAssignedRepDisplay = getCustomerAssignedRepDisplay(
-        thread.representativeItem,
-        customers,
-        workflowState.reps,
-      );
 
       return {
         ...thread,
         latestActivityAt,
         locationId,
-        assignedRepId: currentAssignment?.assignedRepId,
-        assignedRepName: currentAssignment?.assignedRepName,
+        assignedRepId: assignmentResolution.primaryRepId,
+        assignedRepName: assignmentResolution.primaryRepName,
         assignedRepInitials: assignedRep?.initials,
-        customerAssignedRepIds: customerAssignedRepDisplay.ids,
-        customerAssignedRepNames: customerAssignedRepDisplay.names,
-        customerAssignedRepInitials: customerAssignedRepDisplay.initials,
+        customerAssignedRepIds: assignmentResolution.assignedRepIds,
+        customerAssignedRepNames: assignmentResolution.assignedRepNames,
+        customerAssignedRepInitials: assignmentResolution.assignedRepIds.map(
+          (repId) =>
+            workflowState.reps.find((rep) => rep.id === repId)?.initials ?? "",
+        ),
         assignmentType: currentAssignment?.type,
+        assignmentResolution,
         currentAssignment,
         assignmentHistory: threadState?.assignmentHistory ?? [],
         status: threadState?.status ?? "new",
@@ -466,6 +546,7 @@ export function buildWorkflowThreads(options: {
         activePresenceRecords,
         slaMinutes: getElapsedMinutes(thread.oldestReceivedAt, now),
         firstReplyAt,
+        firstReplySource,
         sla,
         updatedAt: threadState?.updatedAt,
         updatedByRepId: threadState?.updatedByRepId,
@@ -519,6 +600,7 @@ export function filterWorkflowThreads(options: {
   queueScopeView: QueueScopeView;
   statusFilter: WorkflowStatusFilter;
   searchQuery: string;
+  bypassAssignmentScope?: boolean;
 }): WorkflowThread[] {
   const {
     threads,
@@ -526,11 +608,13 @@ export function filterWorkflowThreads(options: {
     queueScopeView,
     statusFilter,
     searchQuery,
+    bypassAssignmentScope = false,
   } = options;
 
   return threads.filter(
     (thread) =>
-      matchesQueueScope(thread, queueScopeView, currentRep) &&
+      (bypassAssignmentScope ||
+        matchesQueueScope(thread, queueScopeView, currentRep)) &&
       matchesLocationScope(thread, currentRep) &&
       matchesStatusFilter(thread, statusFilter) &&
       matchesSearch(thread, searchQuery),
@@ -546,7 +630,11 @@ export function applySupervisorQuickFilter(options: {
 
   switch (quickFilter) {
     case "unassigned":
-      return threads.filter((thread) => !thread.assignedRepId && isThreadOpen(thread));
+      return threads.filter(
+        (thread) =>
+          thread.assignmentResolution.assignmentStatus === "unassigned" &&
+          isThreadOpen(thread),
+      );
     case "over_sla":
       return threads.filter((thread) => isThreadOpen(thread) && isThreadSlaBreached(thread));
     case "waiting_on_customer":
@@ -575,19 +663,27 @@ export function groupWorkflowThreadsByAssignedRep(options: {
   const sectionMap = new Map<string, RepGroupedQueueSection>();
 
   for (const thread of threads) {
-    const isUnassigned = !thread.assignedRepId;
-    const rep = isUnassigned
+    const isUnassigned =
+      thread.assignmentResolution.assignmentStatus === "unassigned";
+    const primaryRepId = thread.assignmentResolution.primaryRepId;
+    const rep = isUnassigned || !primaryRepId
       ? undefined
-      : reps.find((candidate) => candidate.id === thread.assignedRepId);
-    const groupId = rep?.id ?? "unassigned";
+      : reps.find((candidate) => candidate.id === primaryRepId);
+
+    if (!isUnassigned && !rep && thread.assignmentResolution.assignmentStatus !== "missing_rep") {
+      continue;
+    }
+
+    const groupId = isUnassigned ? "unassigned" : primaryRepId!;
     const repName =
-      rep?.name || thread.assignedRepName || (isUnassigned ? "Unassigned" : "Unknown Rep");
+      rep?.name ||
+      (isUnassigned ? "Unassigned" : ASSIGNED_REP_MISSING_LABEL);
     const existingSection = sectionMap.get(groupId);
 
     if (!existingSection) {
       sectionMap.set(groupId, {
         groupId,
-        repId: rep?.id,
+        repId: isUnassigned ? undefined : primaryRepId,
         repName,
         threads: [thread],
         openThreadCount: isThreadOpen(thread) ? 1 : 0,
@@ -695,7 +791,9 @@ export function calculateWorkflowMetrics(options: {
 
   return {
     totalOpen: openThreads.length,
-    unassigned: openThreads.filter((thread) => !thread.assignedRepId).length,
+    unassigned: openThreads.filter(
+      (thread) => thread.assignmentResolution.assignmentStatus === "unassigned",
+    ).length,
     avgWaitMinutes,
     oldestOpenMinutes:
       openThreads.length > 0
@@ -735,7 +833,9 @@ export function calculateSupervisorSummaryMetrics(options: {
 
   return {
     totalOpen: countableThreads.length,
-    unassigned: unresolvedThreads.filter((thread) => !thread.assignedRepId).length,
+    unassigned: unresolvedThreads.filter(
+      (thread) => thread.assignmentResolution.assignmentStatus === "unassigned",
+    ).length,
     avgWaitMinutes,
     oldestOpenMinutes:
       unresolvedThreads.length > 0
@@ -763,13 +863,14 @@ export function calculateRepWorkloadSummaries(options: {
     .filter((rep) => rep.isActive !== false)
     .map((rep) => {
       const assignedThreads = threads.filter(
-        (thread) => thread.assignedRepId === rep.id,
+        (thread) => thread.assignmentResolution.assignedRepIds.includes(rep.id),
       );
       const openThreads = assignedThreads.filter((thread) => isThreadOpen(thread));
 
       return {
         repId: rep.id,
         repName: rep.name,
+        repEmail: rep.email,
         repRole: rep.role,
         openThreadCount: openThreads.length,
         waitingOnCustomerCount: openThreads.filter(

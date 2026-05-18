@@ -1,4 +1,7 @@
 const CLEAR_REQUEST_PATTERNS = [
+  "are the",
+  "getting prepared",
+  "when will",
   "please cancel",
   "cancel all",
   "cancel this",
@@ -35,6 +38,35 @@ const CLEAR_REQUEST_PATTERNS = [
   "please correct",
 ];
 
+const TOPIC_REQUEST_PATTERNS = [
+  "pallet details",
+  "pallet detail",
+  "ship date",
+  "outbound ship date",
+  "status",
+  "eta",
+];
+
+const TOPIC_REQUEST_FRAMING_PATTERNS = [
+  "please",
+  "pls",
+  "can you",
+  "could you",
+  "would you",
+  "do you",
+  "do we",
+  "are the",
+  "are there",
+  "when will",
+  "waiting for",
+  "need",
+  "provide",
+  "send",
+  "update",
+  "confirm",
+  "let me know",
+];
+
 const CONTINUATION_PATTERNS = [
   "i just sent it",
   "i just sent it in a separate email",
@@ -49,6 +81,35 @@ const CONTINUATION_PATTERNS = [
   "attached",
   "noted",
   "understood",
+];
+
+const CUSTOMER_FOLLOW_UP_PATTERNS = [
+  "are the",
+  "are there",
+  "can you provide",
+  "could you provide",
+  "do you have",
+  "do we have",
+  "waiting for",
+  "status",
+  "eta",
+  "when will",
+  "getting prepared",
+  "please provide",
+  "kindly provide",
+  "pallet details",
+  "pallet detail",
+  "pallet weight",
+  "pallet dimensions",
+  "total cases",
+  "cases per pallet",
+  "units per case",
+  "pick ticket",
+  "ship date",
+  "outbound ship date",
+  "routing details",
+  "bol",
+  "asn",
 ];
 
 const INTERNAL_OPERATION_PATTERNS = [
@@ -191,6 +252,35 @@ export function includesAny(text: string, patterns: string[]): boolean {
   return patterns.some((pattern) => text.includes(pattern));
 }
 
+function includesTopicRequestPattern(text: string): boolean {
+  return TOPIC_REQUEST_PATTERNS.some((pattern) => (
+    pattern === "eta" ? /\beta\b/.test(text) : text.includes(pattern)
+  ));
+}
+
+function hasTopicRequestFraming(text: string): boolean {
+  return text.includes("?") || includesAny(text, TOPIC_REQUEST_FRAMING_PATTERNS);
+}
+
+export function hasCustomerFollowUpRequest(text: string): boolean {
+  const normalized = normalizeWhitespace(text).toLowerCase();
+
+  if (!normalized) {
+    return false;
+  }
+
+  const hasQuestion = normalized.includes("?");
+  const hasFollowUpLanguage = includesAny(normalized, CUSTOMER_FOLLOW_UP_PATTERNS);
+  const hasOperationalLanguage =
+    hasLogisticsCoordinationSignals(normalized) ||
+    isInternalOperationsThread(normalized) ||
+    normalized.includes("pallet") ||
+    normalized.includes("pick ticket") ||
+    normalized.includes("ship date");
+
+  return (hasQuestion && hasOperationalLanguage) || hasFollowUpLanguage;
+}
+
 export function extractLatestMessageText(email: string): string {
   const lines = email.replace(/\r/g, "").split("\n");
   const latestLines: string[] = [];
@@ -228,7 +318,10 @@ export function hasClearRequest(text: string): boolean {
     return false;
   }
 
-  return includesAny(normalized, CLEAR_REQUEST_PATTERNS);
+  return (
+    includesAny(normalized, CLEAR_REQUEST_PATTERNS) ||
+    (includesTopicRequestPattern(normalized) && hasTopicRequestFraming(normalized))
+  );
 }
 
 export function isLikelyThreadContinuation(latestMessageText: string, fullEmailText: string): boolean {
@@ -236,6 +329,10 @@ export function isLikelyThreadContinuation(latestMessageText: string, fullEmailT
   const normalizedFull = normalizeWhitespace(fullEmailText).toLowerCase();
 
   if (!normalizedLatest) {
+    return false;
+  }
+
+  if (hasCustomerFollowUpRequest(normalizedLatest)) {
     return false;
   }
 

@@ -1,4 +1,5 @@
 import type {
+  AssignmentRecord,
   AssignmentReason,
   EmailInternalNote,
   QueueDisplayMode,
@@ -30,7 +31,7 @@ const DEFAULT_REPS: RepProfile[] = [
     initials: "MJ",
     email: "mia.johnson@actiondesk.local",
     role: "rep",
-    locationId: "apexpress-1",
+    locationId: "apexpress_irwindale",
   },
   {
     id: "rep-ar",
@@ -38,7 +39,7 @@ const DEFAULT_REPS: RepProfile[] = [
     initials: "AR",
     email: "alex.rivera@actiondesk.local",
     role: "rep",
-    locationId: "apexpress-1",
+    locationId: "apexpress_irwindale",
   },
   {
     id: "rep-lc",
@@ -46,7 +47,7 @@ const DEFAULT_REPS: RepProfile[] = [
     initials: "LC",
     email: "logan.chen@actiondesk.local",
     role: "supervisor",
-    locationId: "apexpress-1",
+    locationId: "apexpress_irwindale",
   },
   {
     id: "admin-sl",
@@ -277,6 +278,7 @@ function normalizeThreadWorkflowState(value: unknown): ThreadWorkflowState {
     locationId: normalizeLocationId(state.locationId),
     resolvedAt: safeText(state.resolvedAt).trim() || undefined,
     manualAssignment: normalizeAssignmentRecord(state.manualAssignment) ?? undefined,
+    autoAssignment: normalizeAssignmentRecord(state.autoAssignment) ?? undefined,
     assignmentHistory: Array.isArray(state.assignmentHistory)
       ? state.assignmentHistory
           .map((entry) => normalizeAssignmentRecord(entry))
@@ -631,6 +633,40 @@ export function takeThreadAssignment(
         ? current.status
         : "in_progress",
   }), rep);
+}
+
+export function setThreadAutoAssignment(
+  state: WorkflowState,
+  threadId: string,
+  autoAssignment: AssignmentRecord | undefined,
+  locationId?: string,
+): WorkflowState {
+  const currentState = ensureThreadState(state, threadId);
+
+  if (currentState.manualAssignment) {
+    return state;
+  }
+
+  const currentAutoAssignment = currentState.autoAssignment;
+  const normalizedLocationId = normalizeLocationId(locationId);
+  const currentLocationId = currentState.locationId;
+  const hasSameAssignment =
+    currentAutoAssignment?.assignedRepId === autoAssignment?.assignedRepId &&
+    currentAutoAssignment?.assignedRepName === autoAssignment?.assignedRepName &&
+    currentAutoAssignment?.assignedAt === autoAssignment?.assignedAt &&
+    currentAutoAssignment?.type === autoAssignment?.type;
+  const hasSameLocation =
+    !normalizedLocationId || currentLocationId === normalizedLocationId;
+
+  if (hasSameAssignment && hasSameLocation) {
+    return state;
+  }
+
+  return updateThreadState(state, threadId, (current) => ({
+    ...current,
+    autoAssignment,
+    locationId: current.locationId ?? normalizedLocationId,
+  }));
 }
 
 export function addInternalNote(

@@ -4,7 +4,11 @@ import { mapActionDeskResultToPriorityReasons, mapPriorityScoreToBand } from "./
 import type { ActionDeskResult } from "../types/actionDesk";
 
 function mapCurrentAnalysisSource(source: ActionDeskResult["analysisSource"]): AnalysisSource {
-  return source === "ai" ? "ai" : "heuristic";
+  if (source === "ai" || source === "hybrid") {
+    return source;
+  }
+
+  return "heuristic";
 }
 
 function buildExtractedSignals(result: ActionDeskResult): string[] {

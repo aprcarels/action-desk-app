@@ -14,7 +14,7 @@ function buildGraphMessagesPath(cursor?: string, limit?: number) {
     "$top": String(limit ?? DEFAULT_INBOX_PAGE_SIZE),
     "$orderby": "receivedDateTime desc",
     "$select":
-      "id,conversationId,subject,from,receivedDateTime,bodyPreview,body,webLink,toRecipients,ccRecipients,internetMessageHeaders",
+      "id,conversationId,subject,from,receivedDateTime,sentDateTime,bodyPreview,body,hasAttachments,webLink,toRecipients,ccRecipients,internetMessageHeaders",
   });
 
   return `/me/messages?${searchParams.toString()}`;

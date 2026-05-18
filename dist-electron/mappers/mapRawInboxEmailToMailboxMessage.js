@@ -7,6 +7,8 @@ function mapInboxProviderToMailboxSource(provider) {
             return "outlook_graph";
         case "outlook_addin_import":
             return "imported";
+        case "test_data":
+            return "mock";
         case "dev_json":
         default:
             return "mock";
@@ -30,6 +32,9 @@ function extractIdentifier(rawEmail, pattern) {
 function mapRawInboxEmailToMailboxMessage(rawEmail) {
     const now = new Date().toISOString();
     const receivedAt = normalizeTimestamp(rawEmail.receivedAt, now);
+    const sentAt = rawEmail.sentAt
+        ? normalizeTimestamp(rawEmail.sentAt, receivedAt)
+        : null;
     return {
         id: rawEmail.id,
         providerMessageId: rawEmail.externalId.trim() || rawEmail.id,
@@ -42,16 +47,16 @@ function mapRawInboxEmailToMailboxMessage(rawEmail) {
         folderName: null,
         fromName: rawEmail.fromName.trim() || null,
         fromEmail: rawEmail.fromEmail.trim(),
-        toEmails: [],
-        ccEmails: [],
+        toEmails: rawEmail.toRecipients?.map((recipient) => recipient.trim()).filter(Boolean) ?? [],
+        ccEmails: rawEmail.ccRecipients?.map((recipient) => recipient.trim()).filter(Boolean) ?? [],
         subject: rawEmail.subject.trim() || "(no subject)",
         bodyPreview: rawEmail.previewText?.trim() || null,
         bodyText: rawEmail.bodyText.trim() || null,
         receivedAt,
-        sentAt: null,
+        sentAt,
         isRead: false,
-        hasAttachments: false,
-        webLink: null,
+        hasAttachments: rawEmail.hasAttachments === true,
+        webLink: rawEmail.outlookWebLink?.trim() || null,
         extractedIdentifiers: {
             orderNumber: extractIdentifier(rawEmail, /\bORD-\d+\b/i),
             caseNumber: extractIdentifier(rawEmail, /\b(?:CASE|TICKET|REF)[-:\s#]*[A-Z0-9-]{4,}\b/i),

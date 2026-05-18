@@ -52,6 +52,9 @@ describe("OutlookGraphInboxRepository", () => {
     expect(fetchMock.mock.calls[0]?.[0]).toContain(
       "https://graph.microsoft.com/v1.0/me/messages?",
     );
+    expect(decodeURIComponent(String(fetchMock.mock.calls[0]?.[0]))).toContain(
+      "$select=id,conversationId,subject,from,receivedDateTime,sentDateTime,bodyPreview,body,hasAttachments",
+    );
     expect(fetchMock.mock.calls[0]?.[0]).not.toContain("/users/");
     expect(fetchMock.mock.calls[0]?.[0]).not.toContain("ecomcsr@apexpress.com");
     expect(result.emails[0]?.outlookWebLink).toBe(

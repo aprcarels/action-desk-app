@@ -64,7 +64,7 @@ describe("updateProcessedEmailCache", () => {
       customerMatch: {
         customerId: "customer-1",
         customerName: "Acme",
-        matchedOn: "sender_email",
+        matchedOn: "domain",
       },
       result: {
         priorityScore: 65,

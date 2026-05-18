@@ -72,6 +72,51 @@ const { SharedWorkflowStore } = require("./sharedWorkflowStore.cjs") as {
       domains: string[];
       ownerRepId?: string;
     }>;
+    saveThreadState: (
+      sessionId: string,
+      threadId: string,
+      threadState: {
+        autoAssignment?: {
+          type: "auto";
+          assignedRepId: string;
+          assignedRepName: string;
+          assignedAt: string;
+        };
+        assignmentHistory: unknown[];
+        notes: unknown[];
+        replyLog: unknown[];
+      },
+    ) => {
+      autoAssignment?: {
+        type: "auto";
+        assignedRepId: string;
+        assignedRepName: string;
+        assignedAt: string;
+      };
+    };
+    getBootstrap: (sessionId: string) => {
+      customers: Array<{
+        id: string;
+        name: string;
+        emails: string[];
+        domains: string[];
+        ownerRepId?: string;
+        locationId?: string;
+      }>;
+      workflowState: {
+        threadStates: Record<
+          string,
+          {
+            autoAssignment?: {
+              type: "auto";
+              assignedRepId: string;
+              assignedRepName: string;
+              assignedAt: string;
+            };
+          }
+        >;
+      };
+    };
   };
 };
 
@@ -252,6 +297,28 @@ describeWithNativeSqlite("SharedWorkflowStore customer domains", () => {
     });
   });
 
+  it("keeps all saved customers in bootstrap instead of collapsing to one", () => {
+    const { store, sessionId } = createStore();
+
+    store.upsertCustomer(sessionId, {
+      name: "Nike",
+      emails: ["buyer@nike.com"],
+      domains: ["nike.com"],
+      ownerRepId: "rep-mj",
+    });
+    store.upsertCustomer(sessionId, {
+      name: "Acme",
+      emails: ["buyer@acme.com"],
+      domains: ["acme.com"],
+      ownerRepId: "rep-ar",
+    });
+
+    expect(store.getBootstrap(sessionId).customers.map((customer) => customer.name)).toEqual([
+      "Acme",
+      "Nike",
+    ]);
+  });
+
   it("blocks public mailbox domains from being saved", () => {
     const { store, sessionId } = createStore();
 
@@ -307,6 +374,59 @@ describeWithNativeSqlite("SharedWorkflowStore customer domains", () => {
       resolutionSlaMinutes: 12 * 60,
       warningThresholdPercent: 80,
       warningMinutesBeforeBreach: 20,
+    });
+  });
+
+  it("persists auto assignment in shared workflow state across reloads", () => {
+    const tempDirectory = mkdtempSync(join(tmpdir(), "action-desk-auto-assignment-"));
+    const databasePath = join(tempDirectory, "shared.sqlite");
+    const store = new SharedWorkflowStore(databasePath, {
+      enableDemoData: true,
+      logger: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      },
+    });
+    tempDirectories.push(tempDirectory);
+    stores.push(store);
+    const session = store.startSessionForIdentity("session-admin", {
+      entraObjectId: "entra-admin-1",
+      email: "sam.lee@actiondesk.local",
+    });
+
+    store.saveThreadState(session.sessionId, "customer:customer-1", {
+      autoAssignment: {
+        type: "auto",
+        assignedRepId: "rep-mj",
+        assignedRepName: "Mia Johnson",
+        assignedAt: "2026-04-21T12:00:00.000Z",
+      },
+      assignmentHistory: [],
+      notes: [],
+      replyLog: [],
+    });
+    store.database.close();
+    stores.pop();
+
+    const restartedStore = new SharedWorkflowStore(databasePath, {
+      enableDemoData: true,
+      logger: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      },
+    });
+    stores.push(restartedStore);
+
+    expect(
+      restartedStore.getBootstrap(session.sessionId).workflowState.threadStates[
+        "customer:customer-1"
+      ]?.autoAssignment,
+    ).toMatchObject({
+      type: "auto",
+      assignedRepId: "rep-mj",
+      assignedRepName: "Mia Johnson",
     });
   });
 

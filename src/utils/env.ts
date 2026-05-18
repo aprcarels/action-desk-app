@@ -1,4 +1,5 @@
 type EnvKey =
+  | "ACTION_DESK_API_URL"
   | "ACTION_DESK_ENABLE_DEMO_DATA"
   | "DEV"
   | "VITE_INBOX_SOURCE"

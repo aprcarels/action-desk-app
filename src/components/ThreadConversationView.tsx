@@ -9,6 +9,10 @@ import { InternalNotesPanel } from "./InternalNotesPanel";
 import { ReplyLogPanel } from "./ReplyLogPanel";
 import { getIntentLabel, getRiskLabel } from "../services/analysisTaxonomy";
 import { getWorkTypeLabel } from "../services/customerServiceMail";
+import {
+  getAnalysisSourceDisclosure,
+  getDraftSourceDisclosure,
+} from "../services/sourceDisclosure";
 import type { ProcessedEmail, WorkflowThread } from "../types/actionDesk";
 
 type ThreadConversationViewProps = {
@@ -33,10 +37,12 @@ type ThreadConversationViewProps = {
   onReplyHistoryOpenChange: (nextOpen: boolean) => void;
   onOlderMessagesOpenChange: (nextOpen: boolean) => void;
   onCopyReply: () => void;
+  onCopyReplyAndOpenOutlook: () => void;
   onCopyCaseForReview: () => void;
   onCopyRawCaseJson: () => void;
   onRegenerateReply: () => void;
   onAddInternalNote: (body: string) => void;
+  canOpenOutlook: boolean;
   showDebugActions?: boolean;
 };
 
@@ -76,10 +82,12 @@ export function ThreadConversationView({
   onReplyHistoryOpenChange,
   onOlderMessagesOpenChange,
   onCopyReply,
+  onCopyReplyAndOpenOutlook,
   onCopyCaseForReview,
   onCopyRawCaseJson,
   onRegenerateReply,
   onAddInternalNote,
+  canOpenOutlook,
   showDebugActions = false,
 }: ThreadConversationViewProps) {
   const result = item.result;
@@ -89,7 +97,18 @@ export function ThreadConversationView({
   }
 
   const draftIssueType = deriveIssueType(result.analysis, result.orderContext);
+  const analysisSourceDisclosure = getAnalysisSourceDisclosure(result.analysisSource);
+  const draftSourceDisclosure = getDraftSourceDisclosure(result.analysisSource);
   const olderMessages = thread.items.filter((threadItem) => threadItem.email.id !== item.email.id);
+  const replyDraftUnavailable =
+    !hasReplyDraft &&
+    (result.analysis.replyNeeded === "no" ||
+      result.analysis.messageType === "internal_alert" ||
+      result.analysis.messageType === "awareness_only" ||
+      Boolean(
+        result.analysis.workType &&
+          result.analysis.workType !== "customer_support",
+      ));
 
   return (
     <div style={{ display: "grid", gap: "16px" }}>
@@ -176,13 +195,22 @@ export function ThreadConversationView({
         defaultOpen={true}
       >
         <div style={{ display: "grid", gap: "14px" }}>
+          <div style={sourceDisclosureRowStyle}>
+            <span title={analysisSourceDisclosure.detail} style={sourceDisclosureBadgeStyle}>
+              Analysis: {analysisSourceDisclosure.label}
+            </span>
+          </div>
+
           <div style={analysisCardStyle}>
-            <p style={eyebrowStyle}>AI Summary</p>
+            <p style={eyebrowStyle}>Triage Summary</p>
             <p style={bodyTextStyle}>{result.analysis.summary || "No summary available."}</p>
           </div>
 
           <div style={recommendationCardStyle}>
-            <p style={{ ...eyebrowStyle, color: "#1e3a8a" }}>Recommended Next Action</p>
+            <div style={recommendationHeaderStyle}>
+              <span style={recommendationPillStyle}>Do this next</span>
+              <p style={{ ...eyebrowStyle, color: "#1e3a8a" }}>Recommended Next Action</p>
+            </div>
             <p style={{ ...bodyTextStyle, color: "#0f172a", fontWeight: 600 }}>
               {result.analysis.nextAction ||
                 "Review the message and determine the next support step."}
@@ -226,6 +254,12 @@ export function ThreadConversationView({
         defaultOpen={true}
       >
         <div style={{ display: "grid", gap: "14px" }}>
+          <div style={sourceDisclosureRowStyle}>
+            <span title={draftSourceDisclosure.detail} style={sourceDisclosureBadgeStyle}>
+              Draft: {draftSourceDisclosure.label}
+            </span>
+          </div>
+
           <div style={draftExplanationStyle}>
             <p style={eyebrowStyle}>Why this draft</p>
             <p style={bodyTextStyle}>
@@ -259,7 +293,9 @@ export function ThreadConversationView({
               }}
             >
               {!hasReplyDraft
-                ? "No Reply Draft"
+                ? replyDraftUnavailable
+                  ? "No Reply Draft"
+                  : "Copy Reply"
                 : copyFeedback === "success"
                   ? "Copied!"
                   : copyFeedback === "error"
@@ -278,6 +314,29 @@ export function ThreadConversationView({
               }}
             >
               {regeneratingReply ? "Regenerating..." : "Regenerate Reply"}
+            </button>
+            <button
+              type="button"
+              onClick={onCopyReplyAndOpenOutlook}
+              disabled={!hasReplyDraft || !canOpenOutlook}
+              title={
+                canOpenOutlook
+                  ? "Copy the reply draft, then open the exact Outlook message."
+                  : "Exact Outlook message link is unavailable for this email."
+              }
+              style={{
+                ...secondaryButtonStyle,
+                backgroundColor:
+                  !hasReplyDraft || !canOpenOutlook ? "#e2e8f0" : "#eff6ff",
+                color:
+                  !hasReplyDraft || !canOpenOutlook ? "#64748b" : "#1d4ed8",
+                borderColor:
+                  !hasReplyDraft || !canOpenOutlook ? "#cbd5e1" : "#93c5fd",
+                cursor:
+                  !hasReplyDraft || !canOpenOutlook ? "not-allowed" : "pointer",
+              }}
+            >
+              {canOpenOutlook ? "Copy & Open Outlook" : "Outlook Link Missing"}
             </button>
             <button
               type="button"
@@ -337,9 +396,13 @@ export function ThreadConversationView({
             <pre style={replyDraftStyle}>{result.replyDraft}</pre>
           ) : (
             <div style={{ ...replyDraftStyle, fontStyle: "italic", color: "#475569" }}>
-              {result.analysis.replyNeeded === "no"
+              {replyActionError
+                ? "Reply draft unavailable."
+                : result.analysis.replyNeeded === "no"
                 ? "Reply not recommended for this message."
-                : "No draft reply available."}
+                : replyDraftUnavailable
+                  ? "No reply draft available for this message."
+                  : "Reply draft pending."}
             </div>
           )}
 
@@ -454,10 +517,29 @@ const analysisCardStyle: React.CSSProperties = {
 };
 
 const recommendationCardStyle: React.CSSProperties = {
-  border: "1px solid #bfdbfe",
+  border: "1px solid #93c5fd",
+  borderLeft: "4px solid #2563eb",
   borderRadius: "14px",
   backgroundColor: "#eff6ff",
   padding: "16px",
+  boxShadow: "0 10px 24px rgba(37, 99, 235, 0.08)",
+};
+
+const recommendationHeaderStyle: React.CSSProperties = {
+  display: "flex",
+  gap: "8px",
+  alignItems: "center",
+  flexWrap: "wrap",
+  marginBottom: "8px",
+};
+
+const recommendationPillStyle: React.CSSProperties = {
+  fontSize: "11px",
+  fontWeight: 700,
+  color: "#ffffff",
+  backgroundColor: "#2563eb",
+  borderRadius: "999px",
+  padding: "4px 8px",
 };
 
 const systemEventCardStyle: React.CSSProperties = {
@@ -474,6 +556,18 @@ const analysisBadgeStyle: React.CSSProperties = {
   backgroundColor: "#e2e8f0",
   borderRadius: "999px",
   padding: "5px 9px",
+};
+
+const sourceDisclosureRowStyle: React.CSSProperties = {
+  display: "flex",
+  gap: "8px",
+  flexWrap: "wrap",
+};
+
+const sourceDisclosureBadgeStyle: React.CSSProperties = {
+  ...analysisBadgeStyle,
+  backgroundColor: "#f1f5f9",
+  color: "#475569",
 };
 
 const issuesListStyle: React.CSSProperties = {

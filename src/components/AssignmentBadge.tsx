@@ -11,8 +11,11 @@ export function AssignmentBadge({
   assignedRepNames,
   assignmentType,
 }: AssignmentBadgeProps) {
+  const hasMultipleAssignedReps = (assignedRepNames?.length ?? 0) > 1;
   const primaryDisplayName =
-    assignedRepInitials || assignedRepName || assignedRepNames?.[0];
+    hasMultipleAssignedReps
+      ? assignedRepNames?.[0]
+      : assignedRepInitials || assignedRepName || assignedRepNames?.[0];
   const additionalAssignedCount = Math.max(
     (assignedRepNames?.length ?? (assignedRepName ? 1 : 0)) - 1,
     0,

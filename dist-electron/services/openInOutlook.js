@@ -1,26 +1,29 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.canOpenInOutlook = canOpenInOutlook;
-exports.buildOutlookSearchUrl = buildOutlookSearchUrl;
+exports.hasExactOutlookMessageLink = hasExactOutlookMessageLink;
+exports.getOpenInOutlookFallbackMessage = getOpenInOutlookFallbackMessage;
+exports.getOutlookOpenTarget = getOutlookOpenTarget;
+const MISSING_EXACT_MESSAGE_LINK_MESSAGE = "We could not open this exact message in Outlook. Please search your Outlook inbox for this subject.";
 function getEmailSource(email) {
     return "email" in email ? email.email : email;
 }
-function getSearchParts(email) {
-    const subject = email.subject.trim();
-    const sender = email.senderEmail.trim() || email.senderName.trim();
-    const parts = [];
-    if (subject) {
-        parts.push(`subject:"${subject}"`);
-    }
-    if (sender) {
-        parts.push(`from:"${sender}"`);
-    }
-    return parts;
+function hasExactOutlookMessageLink(email) {
+    return Boolean(getEmailSource(email).outlookWebLink?.trim());
 }
-function canOpenInOutlook(email) {
-    return getSearchParts(getEmailSource(email)).length > 0;
+function getOpenInOutlookFallbackMessage() {
+    return MISSING_EXACT_MESSAGE_LINK_MESSAGE;
 }
-function buildOutlookSearchUrl(email) {
-    const parts = getSearchParts(getEmailSource(email));
-    return `https://outlook.office.com/mail/?search=${encodeURIComponent(parts.join(" "))}`;
+function getOutlookOpenTarget(email) {
+    const emailSource = getEmailSource(email);
+    const exactLink = emailSource.outlookWebLink?.trim();
+    if (exactLink) {
+        return {
+            type: "exact",
+            url: exactLink,
+        };
+    }
+    return {
+        type: "missing_exact_link",
+        message: MISSING_EXACT_MESSAGE_LINK_MESSAGE,
+    };
 }

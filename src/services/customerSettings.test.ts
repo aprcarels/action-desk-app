@@ -47,8 +47,12 @@ describe("normalizeSavedCustomer", () => {
     ).toEqual({
       id: "customer-1",
       name: "ops@acme.com",
+      email: "ops@acme.com",
       emails: ["ops@acme.com"],
       domains: [],
+      assignedCsrId: "",
+      assignedCSRs: [],
+      isActive: true,
     });
   });
 
@@ -64,6 +68,9 @@ describe("normalizeSavedCustomer", () => {
       name: "Acme Corp",
       emails: [],
       domains: [],
+      assignedCsrId: "",
+      assignedCSRs: [],
+      isActive: true,
     });
   });
 
@@ -79,7 +86,11 @@ describe("normalizeSavedCustomer", () => {
       id: "customer-3",
       name: "nike.com",
       emails: [],
+      domain: "nike.com",
       domains: ["nike.com"],
+      assignedCsrId: "",
+      assignedCSRs: [],
+      isActive: true,
     });
   });
 });

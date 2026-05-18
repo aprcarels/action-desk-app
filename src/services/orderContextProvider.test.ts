@@ -1,8 +1,22 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getMockOrderStatus } from "./getMockOrderStatus";
 import {
   createOrderContextProvider,
 } from "./orderContextProvider";
+
+async function expectMockOrderContext(
+  provider: ReturnType<typeof createOrderContextProvider>,
+  orderNumber: string,
+) {
+  const result = await provider.getOrderContext(orderNumber);
+
+  expect(result).toMatchObject({
+    orderNumber,
+    status: "Mock Status",
+    shipmentStatus: "Mock Shipment Status",
+  });
+  expect(typeof result?.lastUpdated).toBe("string");
+  expect(Number.isNaN(Date.parse(result?.lastUpdated ?? ""))).toBe(false);
+}
 
 describe("createOrderContextProvider", () => {
   afterEach(() => {
@@ -17,9 +31,7 @@ describe("createOrderContextProvider", () => {
       source: "mock",
     });
 
-    await expect(provider.getOrderContext("ORD-1001")).resolves.toEqual(
-      await getMockOrderStatus("ORD-1001"),
-    );
+    await expectMockOrderContext(provider, "ORD-1001");
   });
 
   it("falls back to the mock provider when real is selected without API config", async () => {
@@ -29,9 +41,7 @@ describe("createOrderContextProvider", () => {
       source: "real",
     });
 
-    await expect(provider.getOrderContext("ORD-1002")).resolves.toEqual(
-      await getMockOrderStatus("ORD-1002"),
-    );
+    await expectMockOrderContext(provider, "ORD-1002");
   });
 
   it("uses the real provider when explicitly enabled with an API base URL", async () => {
@@ -64,13 +74,13 @@ describe("createOrderContextProvider", () => {
     });
   });
 
-  it("suppresses mock order context in pilot mode when real lookup is not enabled", async () => {
+  it("does not use pilot mode to suppress an explicitly selected mock provider", async () => {
     vi.stubEnv("VITE_PILOT_MODE", "true");
 
     const provider = createOrderContextProvider({
       source: "mock",
     });
 
-    await expect(provider.getOrderContext("ORD-1001")).resolves.toBeNull();
+    await expectMockOrderContext(provider, "ORD-1001");
   });
 });

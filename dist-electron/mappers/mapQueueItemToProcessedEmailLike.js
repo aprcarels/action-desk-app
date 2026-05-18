@@ -40,7 +40,7 @@ function mapSnapshotAnalysisToCurrentAnalysis(queueItem, snapshot) {
     };
 }
 function mapSnapshotSourceToCurrentSource(source) {
-    return source === "ai" ? "ai" : "fallback";
+    return source;
 }
 function mapQueueItemToOrderContext(queueItem) {
     if (!queueItem.orderNumber) {

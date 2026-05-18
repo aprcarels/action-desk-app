@@ -35,7 +35,7 @@ const emptyFormState: UserFormState = {
   initials: "",
   email: "",
   role: "rep",
-  locationId: "apexpress-1",
+  locationId: "apexpress_irwindale",
   isActive: true,
 };
 
@@ -67,7 +67,11 @@ function getValidationMessage(formState: UserFormState): string | null {
   return null;
 }
 
-function formatTimestamp(value: string): string {
+function formatTimestamp(value?: string): string {
+  if (!value) {
+    return "Not available";
+  }
+
   const date = new Date(value);
 
   if (Number.isNaN(date.getTime())) {
@@ -109,16 +113,20 @@ export function UserAccessManager({
 }: UserAccessManagerProps) {
   const [formState, setFormState] = useState<UserFormState>(emptyFormState);
   const [showValidation, setShowValidation] = useState(false);
+  const safeUsers = Array.isArray(users) ? users : [];
+  const safeLocations = ACTION_DESK_LOCATIONS ?? [];
   const sortedUsers = useMemo(
     () =>
-      [...users].sort((left, right) => {
+      [...safeUsers].sort((left, right) => {
         if (left.isActive !== right.isActive) {
           return left.isActive ? -1 : 1;
         }
 
-        return left.displayName.localeCompare(right.displayName);
+        return (left.displayName ?? left.name ?? "").localeCompare(
+          right.displayName ?? right.name ?? "",
+        );
       }),
-    [users],
+    [safeUsers],
   );
   const validationMessage = getValidationMessage(formState);
   const isEditing = Boolean(formState.userId);
@@ -181,11 +189,11 @@ export function UserAccessManager({
   function handleEdit(user: ManagedUser) {
     setFormState({
       userId: user.id,
-      displayName: user.displayName,
-      initials: user.initials,
-      email: user.email,
+      displayName: user.displayName ?? user.name ?? "",
+      initials: user.initials ?? "",
+      email: user.email ?? "",
       role: user.role,
-      locationId: user.locationId ?? "apexpress-1",
+      locationId: normalizeLocationId(user.locationId) ?? "apexpress_irwindale",
       isActive: user.isActive,
     });
     setShowValidation(false);
@@ -353,7 +361,7 @@ export function UserAccessManager({
               }
               style={inputStyle}
             >
-              {ACTION_DESK_LOCATIONS.map((location) => (
+              {safeLocations.map((location) => (
                 <option key={location.id} value={location.id}>
                   {location.name}
                 </option>
@@ -418,7 +426,7 @@ export function UserAccessManager({
               <div style={{ display: "grid", gap: "8px" }}>
                 <div>
                   <h3 style={{ margin: 0, fontSize: "16px", color: "#0f172a" }}>
-                    {user.displayName}
+                    {user.displayName ?? user.name}
                   </h3>
                   <p style={{ margin: "4px 0 0", fontSize: "13px", color: "#475569" }}>
                     {user.email} | {user.initials}
@@ -510,7 +518,7 @@ export function UserAccessManager({
                     onClick={() => {
                       if (
                         window.confirm(
-                          `Deactivate ${user.displayName}? They will no longer be able to sign in to Action Desk.`,
+                          `Deactivate ${user.displayName ?? user.name}? They will no longer be able to sign in to Action Desk.`,
                         )
                       ) {
                         onDeactivateUser(user.id);

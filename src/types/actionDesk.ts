@@ -71,6 +71,8 @@ export type CustomerAssignmentRole = "primary" | "secondary" | "backup";
 
 export type CustomerCsrAssignment = {
   repId: string;
+  repName?: string;
+  repEmail?: string;
   assignmentRole: CustomerAssignmentRole;
   locationName?: string;
   isActive: boolean;
@@ -79,12 +81,18 @@ export type CustomerCsrAssignment = {
 export type SavedCustomer = {
   id: string;
   name: string;
+  email?: string;
   emails: string[];
+  domain?: string;
   domains: string[];
   ownerRepId?: string;
   ownerRepIds?: string[];
   assignedCSRs?: CustomerCsrAssignment[];
+  assignedCsrId?: string;
   locationId?: string;
+  locationName?: string;
+  locations?: string[];
+  isActive?: boolean;
 };
 
 export type SavedCustomerDraft = {
@@ -101,7 +109,7 @@ export type SavedCustomerDraft = {
 export type CustomerMatch = {
   customerId: string;
   customerName: string;
-  matchedOn: "sender_email" | "sender_domain" | "sender_name" | "subject" | "body";
+  matchedOn: "email" | "domain" | "subject" | "body" | "thread";
   matchedValue: string;
   ownerRepId?: string;
   ownerRepIds?: string[];
@@ -114,6 +122,8 @@ export type AppCapability =
   | "view_my_queue"
   | "view_unassigned"
   | "view_all_emails"
+  | "view_supervisor_queue"
+  | "view_all_work"
   | "manage_customer_ownership"
   | "manage_sla_settings"
   | "review_override_history"
@@ -125,10 +135,13 @@ export type AppCapability =
 export type RepProfile = {
   id: string;
   name: string;
+  displayName?: string;
   initials: string;
   email: string;
   role: RepRole;
   locationId?: string;
+  locationName?: string;
+  allowedLocations?: string[];
   isActive?: boolean;
 };
 
@@ -137,11 +150,14 @@ export type ManagedUserMappingStatus = "mapped" | "pending_first_sign_in";
 export type ManagedUser = {
   id: string;
   entraObjectId?: string;
+  name?: string;
   displayName: string;
   initials: string;
   email: string;
   role: RepRole;
   locationId?: string;
+  locationName?: string;
+  allowedLocations?: string[];
   isActive: boolean;
   hasSignedIn: boolean;
   mappingStatus: ManagedUserMappingStatus;
@@ -170,6 +186,26 @@ export type AssignmentRecord = {
   assignedAt: string;
   reason?: AssignmentReason;
   assignedByRepId?: string;
+};
+
+export type AssignmentResolution = {
+  assignmentStatus: "assigned" | "unassigned" | "missing_rep";
+  assignmentSource:
+    | "manual"
+    | "persisted"
+    | "customer_email"
+    | "customer_domain"
+    | "customer_subject"
+    | "customer_body"
+    | "customer_thread"
+    | "none";
+  primaryRepId?: string;
+  primaryRepName?: string;
+  assignedRepIds: string[];
+  assignedRepNames: string[];
+  customerId?: string;
+  customerName?: string;
+  matchType: "email" | "domain" | "subject" | "body" | "thread" | "none";
 };
 
 export type WorkflowStatus =
@@ -231,6 +267,7 @@ export type ThreadWorkflowState = {
   status?: WorkflowStatus;
   resolvedAt?: string;
   manualAssignment?: AssignmentRecord;
+  autoAssignment?: AssignmentRecord;
   assignmentHistory: AssignmentRecord[];
   notes: EmailInternalNote[];
   replyLog: ReplyLogEntry[];
@@ -316,7 +353,7 @@ export type EmailAnalysis = {
   hasOperationalTimingSignal?: boolean;
 };
 
-export type AnalysisSource = "ai" | "fallback";
+export type AnalysisSource = "ai" | "fallback" | "heuristic" | "hybrid";
 
 export type PilotQueueView =
   | "active"
@@ -350,8 +387,12 @@ export type EmailItem = {
   senderEmail: string;
   subject: string;
   receivedAt: string;
+  sentAt?: string;
   body: string;
   previewText?: string;
+  hasAttachments?: boolean;
+  toRecipients?: string[];
+  ccRecipients?: string[];
   provider?: InboxProvider;
   source?: "seeded" | "outlook_import" | "outlook_graph" | "test_data";
   outlookWebLink?: string;
@@ -406,6 +447,7 @@ export type WorkflowThread = {
   customerAssignedRepNames?: string[];
   customerAssignedRepInitials?: string[];
   assignmentType?: "auto" | "manual";
+  assignmentResolution: AssignmentResolution;
   currentAssignment?: AssignmentRecord;
   assignmentHistory: AssignmentRecord[];
   status: WorkflowStatus;
@@ -420,6 +462,7 @@ export type WorkflowThread = {
   activePresenceRecords: ThreadPresenceRecord[];
   slaMinutes: number;
   firstReplyAt?: string;
+  firstReplySource?: "logged" | "thread";
   sla: {
     firstResponse: WorkflowThreadSlaStatus;
     resolution: WorkflowThreadSlaStatus;

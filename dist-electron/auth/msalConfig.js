@@ -17,10 +17,12 @@ function getMsalRuntimeConfig() {
         redirectUri: (0, env_1.getEnv)("VITE_AZURE_REDIRECT_URI"),
     };
 }
-function normalizeLocalhostHttps(url) {
+function normalizeLocalhostProtocol(url, options) {
     try {
         const parsedUrl = new URL(url);
-        if (parsedUrl.hostname === "localhost" && parsedUrl.protocol === "http:") {
+        if (options?.preferHttps === true &&
+            parsedUrl.hostname === "localhost" &&
+            parsedUrl.protocol === "http:") {
             parsedUrl.protocol = "https:";
             return parsedUrl.toString();
         }
@@ -30,14 +32,25 @@ function normalizeLocalhostHttps(url) {
         return url;
     }
 }
-function resolveRedirectOrigin(config) {
-    const fallbackOrigin = typeof window !== "undefined" && window.location?.origin
-        ? window.location.origin
-        : "https://localhost:5173";
-    return normalizeLocalhostHttps(config.redirectUri ?? fallbackOrigin);
+function isElectronDesktopRuntime() {
+    return (typeof window !== "undefined" &&
+        Boolean(window.actionDeskDesktop?.isElectron));
 }
-function resolveAuthCallbackRedirectUri() {
-    return new URL(MSAL_CALLBACK_PATH, resolveRedirectOrigin(getMsalRuntimeConfig())).toString();
+function resolveRedirectBaseUrl(config) {
+    const isElectronDesktop = isElectronDesktopRuntime();
+    const windowOrigin = typeof window !== "undefined" && window.location?.origin
+        ? window.location.origin
+        : undefined;
+    const fallbackOrigin = windowOrigin ?? "https://localhost:5173";
+    const configuredBaseUrl = isElectronDesktop && windowOrigin
+        ? windowOrigin
+        : config.redirectUri ?? fallbackOrigin;
+    return normalizeLocalhostProtocol(configuredBaseUrl, {
+        preferHttps: !isElectronDesktop,
+    });
+}
+function resolveAuthCallbackRedirectUri(config) {
+    return new URL(MSAL_CALLBACK_PATH, resolveRedirectBaseUrl(config)).toString();
 }
 function resolveMsalAuthority(config) {
     if (config.authority) {
@@ -59,11 +72,12 @@ function describeMissingMsalConfig(config) {
     return missing;
 }
 function createMsalConfiguration(config) {
+    const redirectUri = resolveAuthCallbackRedirectUri(config);
     return {
         auth: {
             clientId: config.clientId ?? "",
             authority: resolveMsalAuthority(config),
-            redirectUri: resolveRedirectOrigin(config),
+            redirectUri,
         },
         cache: {
             cacheLocation: "localStorage",
@@ -76,7 +90,7 @@ function createMsalConfiguration(config) {
     };
 }
 function createMailReadPopupRequest() {
-    const redirectUri = resolveAuthCallbackRedirectUri();
+    const redirectUri = resolveAuthCallbackRedirectUri(getMsalRuntimeConfig());
     if ((0, env_1.getEnv)("DEV") === "true") {
         console.info("[Action Desk] MSAL popup redirect URI:", redirectUri);
     }

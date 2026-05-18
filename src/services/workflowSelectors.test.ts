@@ -82,7 +82,7 @@ describe("workflowSelectors", () => {
           customerMatch: {
             customerId: "customer-1",
             customerName: "Acme",
-            matchedOn: "sender_email",
+            matchedOn: "email",
             matchedValue: "orders@acme.com",
             ownerRepId: reps[0].id,
           },
@@ -97,7 +97,7 @@ describe("workflowSelectors", () => {
           customerMatch: {
             customerId: "customer-1",
             customerName: "Acme",
-            matchedOn: "sender_email",
+            matchedOn: "email",
             matchedValue: "orders@acme.com",
             ownerRepId: reps[0].id,
           },
@@ -125,10 +125,18 @@ describe("workflowSelectors", () => {
       assignedRepId: reps[0].id,
       assignedRepName: reps[0].name,
       customerAssignedRepNames: [reps[0].name],
+      assignmentResolution: {
+        assignmentStatus: "assigned",
+        assignmentSource: "customer_domain",
+        primaryRepId: reps[0].id,
+        primaryRepName: reps[0].name,
+        assignedRepIds: [reps[0].id],
+        matchType: "domain",
+      },
     });
     expect(thread?.representativeItem.customerMatch).toMatchObject({
       customerId: "customer-1",
-      matchedOn: "sender_email",
+      matchedOn: "domain",
     });
   });
 
@@ -167,6 +175,266 @@ describe("workflowSelectors", () => {
     });
   });
 
+  it("keeps assigned customer work out of the supervisor unassigned filter", () => {
+    const threads = buildWorkflowThreads({
+      items: [buildProcessedEmail()],
+      workflowState: baseState,
+      customers,
+      now,
+    });
+    const unassignedThreads = applySupervisorQuickFilter({
+      threads,
+      quickFilter: "unassigned",
+      now,
+    });
+
+    expect(threads[0]?.assignedRepId).toBe(reps[0].id);
+    expect(threads[0]?.assignmentResolution.assignmentStatus).toBe("assigned");
+    expect(unassignedThreads).toEqual([]);
+  });
+
+  it("keeps domain-owned customer work out of the unassigned queue", () => {
+    const [thread] = buildWorkflowThreads({
+      items: [
+        buildProcessedEmail({
+          email: {
+            ...buildProcessedEmail().email,
+            senderName: "Acme Billing",
+            senderEmail: "billing@acme.com",
+          },
+        }),
+      ],
+      workflowState: baseState,
+      customers: [
+        {
+          id: "customer-domain",
+          name: "Acme Domain",
+          emails: [],
+          domains: ["acme.com"],
+          ownerRepId: reps[0].id,
+        },
+      ],
+      now,
+    });
+
+    const unassignedThreads = filterWorkflowThreads({
+      threads: thread ? [thread] : [],
+      currentRep: reps[2],
+      queueScopeView: "unassigned",
+      statusFilter: "open",
+      searchQuery: "",
+    });
+
+    expect(thread).toMatchObject({
+      assignedRepId: reps[0].id,
+      assignmentResolution: {
+        assignmentStatus: "assigned",
+        assignmentSource: "customer_domain",
+        primaryRepId: reps[0].id,
+        matchType: "domain",
+      },
+    });
+    expect(unassignedThreads).toEqual([]);
+  });
+
+  it("assigns customer work matched from body text to the configured CSR", () => {
+    const [thread] = buildWorkflowThreads({
+      items: [
+        buildProcessedEmail({
+          email: {
+            ...buildProcessedEmail().email,
+            id: "email-body-match",
+            senderName: "Hector Salas",
+            senderEmail: "hsalas@apexpress.com",
+            subject: "Please review",
+            body: "Meliibaby is asking whether ORD-1001 has shipped.",
+          },
+        }),
+      ],
+      workflowState: baseState,
+      customers: [
+        {
+          id: "customer-meliibaby",
+          name: "Meliibaby",
+          emails: [],
+          domains: [],
+          ownerRepId: reps[1].id,
+          assignedCSRs: [
+            {
+              repId: reps[1].id,
+              assignmentRole: "primary",
+              isActive: true,
+            },
+          ],
+        },
+      ],
+      now,
+    });
+
+    expect(thread).toMatchObject({
+      id: "customer:customer-meliibaby",
+      assignedRepId: reps[1].id,
+      assignmentResolution: {
+        assignmentStatus: "assigned",
+        assignmentSource: "customer_body",
+        primaryRepId: reps[1].id,
+        matchType: "body",
+      },
+    });
+    expect(thread?.representativeItem.customerMatch).toMatchObject({
+      customerId: "customer-meliibaby",
+      matchedOn: "body",
+    });
+  });
+
+  it("assigns customer work matched from thread text and excludes it from Unassigned", () => {
+    const threads = buildWorkflowThreads({
+      items: [
+        buildProcessedEmail({
+          email: {
+            ...buildProcessedEmail().email,
+            id: "email-thread-internal",
+            conversationId: "conversation-meliibaby",
+            senderName: "Hector Salas",
+            senderEmail: "hsalas@apexpress.com",
+            subject: "Please review",
+            receivedAt: "2026-04-21T10:00:00.000Z",
+            body: "Looping in the shared queue for visibility.",
+          },
+        }),
+        buildProcessedEmail({
+          email: {
+            ...buildProcessedEmail().email,
+            id: "email-thread-customer",
+            conversationId: "conversation-meliibaby",
+            senderName: "Buyer",
+            senderEmail: "buyer@example.com",
+            subject: "POD request",
+            receivedAt: "2026-04-21T09:00:00.000Z",
+            body: "Meliibaby needs the POD for ORD-1001.",
+          },
+          result: {
+            ...buildProcessedEmail().result!,
+            priorityScore: 20,
+          },
+        }),
+      ],
+      workflowState: baseState,
+      customers: [
+        {
+          id: "customer-meliibaby",
+          name: "Meliibaby",
+          emails: [],
+          domains: [],
+          ownerRepId: reps[1].id,
+        },
+      ],
+      now,
+    });
+    const [thread] = threads;
+    const unassignedThreads = applySupervisorQuickFilter({
+      threads,
+      quickFilter: "unassigned",
+      now,
+    });
+
+    expect(thread).toMatchObject({
+      id: "customer:customer-meliibaby",
+      assignedRepId: reps[1].id,
+      assignmentResolution: {
+        assignmentStatus: "assigned",
+        assignmentSource: "customer_thread",
+        matchType: "thread",
+      },
+    });
+    expect(thread?.representativeItem.customerMatch).toMatchObject({
+      matchedOn: "thread",
+    });
+    expect(unassignedThreads).toEqual([]);
+  });
+
+  it("uses an existing CSR reply in the thread to satisfy first response SLA", () => {
+    const [thread] = buildWorkflowThreads({
+      items: [
+        buildProcessedEmail({
+          email: {
+            ...buildProcessedEmail().email,
+            id: "email-customer",
+            conversationId: "conversation-replied",
+            senderName: "Customer",
+            senderEmail: "buyer@example.com",
+            subject: "Need update",
+            receivedAt: "2026-04-21T08:00:00.000Z",
+            body: "Can someone help?",
+          },
+        }),
+        buildProcessedEmail({
+          email: {
+            ...buildProcessedEmail().email,
+            id: "email-csr-reply",
+            conversationId: "conversation-replied",
+            senderName: reps[0].name,
+            senderEmail: reps[0].email,
+            subject: "Re: Need update",
+            receivedAt: "2026-04-21T08:30:00.000Z",
+            sentAt: "2026-04-21T08:30:00.000Z",
+            toRecipients: ["buyer@example.com"],
+            body: "I am checking with the warehouse now.",
+          },
+        }),
+      ],
+      workflowState: baseState,
+      customers: [],
+      now,
+    });
+
+    expect(thread?.firstReplyAt).toBe("2026-04-21T08:30:00.000Z");
+    expect(thread?.firstReplySource).toBe("thread");
+    expect(thread?.sla.firstResponse.state).toBe("met");
+    expect(thread?.sla.current.target).toBe("resolution");
+  });
+
+  it("shows a clear fallback when an assigned CSR id is missing from reps", () => {
+    const [thread] = buildWorkflowThreads({
+      items: [buildProcessedEmail()],
+      workflowState: {
+        ...baseState,
+        reps: [],
+      },
+      customers: [
+        {
+          ...customers[0],
+          ownerRepId: "rep-missing",
+          ownerRepIds: ["rep-missing"],
+          assignedCSRs: [
+            {
+              repId: "rep-missing",
+              assignmentRole: "primary",
+              isActive: true,
+            },
+          ],
+        },
+      ],
+      now,
+    });
+    const sections = groupWorkflowThreadsByAssignedRep({
+      threads: thread ? [thread] : [],
+      reps: [],
+      now,
+    });
+
+    expect(thread).toMatchObject({
+      assignedRepId: "rep-missing",
+      assignedRepName: "Assigned Rep Missing",
+      customerAssignedRepNames: ["Assigned Rep Missing"],
+    });
+    expect(sections[0]).toMatchObject({
+      groupId: "rep-missing",
+      repId: "rep-missing",
+      repName: "Assigned Rep Missing",
+    });
+  });
+
   it("filters my queue by effective assignment", () => {
     const threads = buildWorkflowThreads({
       items: [
@@ -175,7 +443,7 @@ describe("workflowSelectors", () => {
           customerMatch: {
             customerId: "customer-1",
             customerName: "Acme",
-            matchedOn: "sender_email",
+            matchedOn: "email",
             matchedValue: "orders@acme.com",
             ownerRepId: reps[0].id,
           },
@@ -259,6 +527,80 @@ describe("workflowSelectors", () => {
     expect(visibleForAdmin).toHaveLength(2);
   });
 
+  it("honors allowed locations when a signed-in rep has no primary location", () => {
+    const threads = buildWorkflowThreads({
+      items: [
+        buildProcessedEmail({
+          email: {
+            ...buildProcessedEmail().email,
+            id: "email-worldpack",
+            senderEmail: "worldpack@example.com",
+            locationId: "worldpackusa",
+          },
+        }),
+      ],
+      workflowState: baseState,
+      customers: [],
+      now,
+    });
+
+    const visibleForAllowedLocationRep = filterWorkflowThreads({
+      threads,
+      currentRep: {
+        ...reps[0],
+        locationId: undefined,
+        allowedLocations: ["worldpackusa_las_vegas"],
+      },
+      queueScopeView: "unassigned",
+      statusFilter: "all",
+      searchQuery: "",
+    });
+
+    expect(visibleForAllowedLocationRep).toHaveLength(1);
+  });
+
+  it("lets All Inbox bypass assignment filtering while keeping location scope", () => {
+    const assignedToOtherRepState = takeThreadAssignment(
+      baseState,
+      "sender:other@example.com",
+      reps[1],
+      "Overflow",
+      reps[1].id,
+    );
+    const threads = buildWorkflowThreads({
+      items: [
+        buildProcessedEmail({
+          email: {
+            ...buildProcessedEmail().email,
+            senderEmail: "other@example.com",
+          },
+        }),
+      ],
+      workflowState: assignedToOtherRepState,
+      customers: [],
+      now,
+    });
+
+    const scopedMyQueue = filterWorkflowThreads({
+      threads,
+      currentRep: reps[0],
+      queueScopeView: "my_queue",
+      statusFilter: "open",
+      searchQuery: "",
+    });
+    const allInbox = filterWorkflowThreads({
+      threads,
+      currentRep: reps[0],
+      queueScopeView: "my_queue",
+      statusFilter: "open",
+      searchQuery: "",
+      bypassAssignmentScope: true,
+    });
+
+    expect(scopedMyQueue).toEqual([]);
+    expect(allInbox).toHaveLength(1);
+  });
+
   it("limits All Emails scope to supervisors and admins", () => {
     expect(getAvailableQueueScopeViews(reps[0])).toEqual([
       "my_queue",
@@ -294,7 +636,7 @@ describe("workflowSelectors", () => {
           customerMatch: {
             customerId: "customer-1",
             customerName: "Acme",
-            matchedOn: "sender_email",
+            matchedOn: "email",
             matchedValue: "orders@acme.com",
             ownerRepId: reps[0].id,
           },
@@ -309,6 +651,11 @@ describe("workflowSelectors", () => {
       id: "customer:customer-1",
       assignmentType: "manual",
       assignedRepId: reps[1].id,
+      assignmentResolution: {
+        assignmentStatus: "assigned",
+        assignmentSource: "manual",
+        primaryRepId: reps[1].id,
+      },
       currentAssignment: {
         type: "manual",
         reason: "Covering for colleague",
@@ -687,6 +1034,46 @@ describe("workflowSelectors", () => {
     ).toEqual([reps[0].id, reps[1].id, "rep-corona", "rep-irwindale-label"]);
   });
 
+  it("keeps zero-ticket CSRs in supervisor workload when they are in the scoped location", () => {
+    const zeroTicketRep = {
+      id: "rep-zero-ticket",
+      name: "Zoe Zero",
+      initials: "ZZ",
+      email: "zoe.zero@example.com",
+      role: "rep" as const,
+      locationId: "Apexpress Irwindale",
+      isActive: true,
+    };
+    const visibleReps = getWorkloadVisibleReps(
+      [reps[0], zeroTicketRep],
+      {
+        ...reps[2],
+        role: "supervisor",
+        locationId: "apexpress-1",
+      },
+    );
+    const workloads = calculateRepWorkloadSummaries({
+      threads: [],
+      reps: visibleReps,
+      now,
+    });
+
+    expect(visibleReps.map((rep) => rep.id)).toEqual([
+      reps[0].id,
+      zeroTicketRep.id,
+    ]);
+    expect(workloads).toEqual([
+      expect.objectContaining({
+        repId: reps[0].id,
+        openThreadCount: 0,
+      }),
+      expect.objectContaining({
+        repId: zeroTicketRep.id,
+        openThreadCount: 0,
+      }),
+    ]);
+  });
+
   it("applies supervisor quick filters for over-SLA and unassigned work", () => {
     const threads = buildWorkflowThreads({
       items: [
@@ -889,6 +1276,75 @@ describe("workflowSelectors", () => {
       waitingOnCustomerCount: 0,
       overSlaCount: 1,
     });
+  });
+
+  it("groups supervisor CSR cards from canonical domain ownership", () => {
+    const outsideLocationRep = {
+      id: "rep-corona",
+      name: "Casey Corona",
+      initials: "CC",
+      email: "casey@example.com",
+      role: "rep" as const,
+      locationId: "apexpress-2",
+      isActive: true,
+    };
+    const stateWithOutsideRep = {
+      ...baseState,
+      reps: [...baseState.reps, outsideLocationRep],
+    };
+    const threads = buildWorkflowThreads({
+      items: [
+        buildProcessedEmail({
+          email: {
+            ...buildProcessedEmail().email,
+            id: "email-ap-domain",
+            senderName: "AP Domain",
+            senderEmail: "orders@ap-domain.com",
+          },
+        }),
+        buildProcessedEmail({
+          email: {
+            ...buildProcessedEmail().email,
+            id: "email-corona-domain",
+            senderName: "Corona Domain",
+            senderEmail: "orders@corona-domain.com",
+          },
+        }),
+      ],
+      workflowState: stateWithOutsideRep,
+      customers: [
+        {
+          id: "customer-ap-domain",
+          name: "AP Domain",
+          emails: [],
+          domains: ["ap-domain.com"],
+          ownerRepId: reps[0].id,
+        },
+        {
+          id: "customer-corona-domain",
+          name: "Corona Domain",
+          emails: [],
+          domains: ["corona-domain.com"],
+          ownerRepId: outsideLocationRep.id,
+        },
+      ],
+      now,
+    });
+
+    const sections = groupWorkflowThreadsByAssignedRep({
+      threads,
+      reps: [reps[0], reps[1]],
+      now,
+    });
+
+    expect(threads.map((thread) => thread.assignmentResolution.assignmentSource)).toEqual([
+      "customer_domain",
+      "customer_domain",
+    ]);
+    expect(sections.map((section) => section.repId)).toEqual([reps[0].id]);
+    expect(sections[0]?.threads.map((thread) => thread.id)).toEqual([
+      "customer:customer-ap-domain",
+    ]);
   });
 
   it("calculates per-section counts from the filtered visible work", () => {

@@ -42,8 +42,15 @@ import {
   formatCaseForReview,
   formatRawCaseJson,
 } from "./services/caseReviewCopy";
+import { syncAutoAssignmentsToWorkflowState } from "./services/autoAssignmentSync";
 import { shouldShowInCustomerServiceQueue } from "./services/customerServiceMail";
-import { generateReply } from "./services/generateReply";
+import { getCustomerOwnerRepIds } from "./services/customerSettings";
+import {
+  generateReply,
+  getReplyUnavailableReason,
+  type ReplyGenerationContext,
+  type ReplyUnavailableReason,
+} from "./services/generateReply";
 import { loadInboxQueue } from "./services/loadInboxQueue";
 import {
   applyBuiltInMacro,
@@ -65,6 +72,7 @@ import {
   type PilotQueueStateMap,
 } from "./services/pilotQueueState";
 import { getQueueAgeInfo } from "./services/queueAging";
+import { isSuppressibleSystemReportMissingBodyFailure } from "./services/systemReportEmail";
 import {
   getCachedProcessedEmail,
   setCachedProcessedEmail,
@@ -86,7 +94,6 @@ import {
   getVisibleWorkflowThreads,
   sanitizeQueueScopeView,
 } from "./services/workflowSelectors";
-import { getVisibleCustomersForSettings } from "./services/customerSettings";
 import {
   clearStoredSharedWorkflowSession,
   clearSharedCustomers,
@@ -122,7 +129,16 @@ import {
   getPresenceConflictWarning,
 } from "./services/threadPresence";
 import { getDefaultSlaSettings } from "./services/sla";
-import { canAccessLocation, getLocationLabel } from "./services/locations";
+import {
+  normalizeManagedUsers,
+  normalizeRepProfiles,
+  normalizeSavedCustomers,
+} from "./services/sharedWorkflowDataNormalization";
+import {
+  ACTION_DESK_LOCATIONS,
+  canAccessLocation,
+  getLocationLabel,
+} from "./services/locations";
 import { getEnv } from "./utils/env";
 import {
   getDefaultRepProfiles,
@@ -158,6 +174,8 @@ import type {
   SavedCustomerDraft,
   SlaSettings,
   SupervisorQuickFilter,
+  ThreadWorkflowState,
+  WorkflowThread,
   WorkflowState,
   WorkflowStatus,
   WorkflowStatusFilter,
@@ -172,12 +190,91 @@ type TopIssue = {
   count: number;
 };
 
+type SharedWorkflowBootstrap = Awaited<
+  ReturnType<typeof loadSharedWorkflowBootstrap>
+>;
+
+type SettingsMutationRefreshOptions = {
+  returnedCustomers?: SavedCustomer[];
+  returnedUsers?: ManagedUser[];
+  savedCustomerId?: string;
+  removedCustomerId?: string;
+  clearCustomers?: boolean;
+};
+
+type InboxReloadReason = "initial" | "manual_refresh";
+
+const QUEUE_PROCESSING_FLUSH_INTERVAL_MS = 200;
+const QUEUE_PROCESSING_FLUSH_BATCH_SIZE = 5;
+
+type BootstrapValidationReason =
+  | "missingCurrentUser"
+  | "invalidBootstrapShape"
+  | "missingCapabilities"
+  | "invalidWorkflowState";
+
+function mergeById<T extends { id: string }>(current: T[], incoming: T[]): T[] {
+  const merged = new Map<string, T>();
+
+  for (const item of current) {
+    if (item.id) {
+      merged.set(item.id, item);
+    }
+  }
+
+  for (const item of incoming) {
+    if (item.id) {
+      merged.set(item.id, item);
+    }
+  }
+
+  return Array.from(merged.values());
+}
+
+function normalizeTextForMatch(value?: string): string {
+  return (value ?? "").trim().toLowerCase();
+}
+
+function containsEveryTextValue(values: string[], expectedValues: string[]): boolean {
+  const normalizedValues = new Set(values.map(normalizeTextForMatch));
+
+  return expectedValues
+    .map(normalizeTextForMatch)
+    .filter(Boolean)
+    .every((value) => normalizedValues.has(value));
+}
+
+function findSavedCustomerIdFromDraft(
+  draft: SavedCustomerDraft,
+  customers: SavedCustomer[],
+): string | undefined {
+  if (draft.id?.trim()) {
+    return draft.id.trim();
+  }
+
+  const normalizedDraftName = normalizeTextForMatch(draft.name);
+  const matchingCustomer = customers.find((customer) => {
+    const nameMatches =
+      normalizedDraftName.length === 0 ||
+      normalizeTextForMatch(customer.name) === normalizedDraftName;
+
+    return (
+      nameMatches &&
+      containsEveryTextValue(customer.emails ?? [], draft.emails ?? []) &&
+      containsEveryTextValue(customer.domains ?? [], draft.domains ?? [])
+    );
+  });
+
+  return matchingCustomer?.id;
+}
+
 function mapManagedUsersToRepProfiles(users: ManagedUser[]): RepProfile[] {
-  return users
+  return normalizeManagedUsers(users)
     .filter((user) => user.isActive)
     .map((user) => ({
       id: user.id,
       name: user.displayName,
+      displayName: user.displayName,
       initials: user.initials,
       email: user.email,
       role: user.role,
@@ -195,6 +292,378 @@ function getErrorMessage(
   }
 
   return fallbackMessage;
+}
+
+function buildReplyGenerationContext(
+  item: ProcessedEmail,
+  thread?: WorkflowThread,
+): ReplyGenerationContext {
+  return {
+    subject: item.email.subject,
+    senderName: item.email.senderName,
+    senderEmail: item.email.senderEmail,
+    body: item.email.body,
+    bodyPreview: item.email.previewText || item.previewText,
+    summary: item.result?.analysis.summary,
+    customerName: item.customerMatch?.customerName || thread?.customerName,
+    threadItemCount: thread?.itemCount ?? 1,
+  };
+}
+
+function getReplyUnavailableMessage(
+  reason: ReplyUnavailableReason | null,
+): string {
+  switch (reason) {
+    case "internal_alert":
+      return "A reply draft is not available because this message is classified as an internal or automated alert.";
+    case "non_customer_work":
+      return "A reply draft is not available because this message is not classified as customer support work.";
+    case "reply_not_needed":
+      return "A reply draft is not available because Action Desk marked this message as not needing a customer response.";
+    case "not_action_required":
+      return "Action Desk marked this message as review-only, so it could not safely create a customer reply.";
+    case "unclear_request":
+      return "Action Desk could not find enough customer request detail to draft a reply.";
+    case null:
+    default:
+      return "The reply generator did not return a draft. Review the case context and try again.";
+  }
+}
+
+function getReplyRegenerationLogContext(
+  item: ProcessedEmail,
+  context: ReplyGenerationContext,
+) {
+  return {
+    emailId: maskIdentifier(item.email.id),
+    queueItemId: maskIdentifier(item.queueItemId),
+    status: item.status,
+    analysisSource: item.result?.analysisSource,
+    intent: item.result?.analysis.intent,
+    urgency: item.result?.analysis.urgency,
+    replyNeeded: item.result?.analysis.replyNeeded,
+    actionability: item.result?.analysis.actionability,
+    workType: item.result?.analysis.workType,
+    hasSubject: hasLoggableText(context.subject),
+    hasBody: hasLoggableText(context.body),
+    hasBodyPreview: hasLoggableText(context.bodyPreview),
+    hasSummary: hasLoggableText(context.summary),
+    hasOrderContext: Boolean(item.result?.orderContext),
+    hasCustomerContext: hasLoggableText(context.customerName),
+    threadItemCount: context.threadItemCount ?? 1,
+  };
+}
+
+function hasLoggableText(value?: string): boolean {
+  return Boolean(value?.trim());
+}
+
+function maskIdentifier(value?: string): string | undefined {
+  const trimmedValue = value?.trim();
+
+  if (!trimmedValue) {
+    return undefined;
+  }
+
+  if (trimmedValue.length <= 8) {
+    return `${trimmedValue.slice(0, 2)}...`;
+  }
+
+  return `${trimmedValue.slice(0, 4)}...${trimmedValue.slice(-4)}`;
+}
+
+function getCustomerDiagnosticName(customer: SavedCustomer): string {
+  return (
+    customer.name?.trim() ||
+    customer.emails?.[0] ||
+    customer.domains?.[0] ||
+    customer.id
+  );
+}
+
+function logSharedWorkflowDataDiagnostics(input: {
+  context: string;
+  currentUser: RepProfile | null;
+  customers: SavedCustomer[];
+  reps: RepProfile[];
+  source?: "backend_api" | "sharedWorkflowStore" | "signed_out";
+}) {
+  if (!import.meta.env.DEV) {
+    return;
+  }
+
+  const activeCsrs = input.reps.filter(
+    (rep) => rep.role === "rep" && rep.isActive !== false,
+  );
+  const assignmentCount = input.customers.reduce(
+    (count, customer) =>
+      count +
+      (customer.assignedCSRs?.filter((assignment) => assignment.isActive).length ??
+        getCustomerOwnerRepIds(customer).length),
+    0,
+  );
+
+  console.info("[Action Desk diagnostics] shared workflow data", {
+    context: input.context,
+    source: input.source ?? "backend_api",
+    loadedLocationsCount: ACTION_DESK_LOCATIONS.length,
+    loadedLocationIds: ACTION_DESK_LOCATIONS.map((location) => location.id),
+    currentUserRole: input.currentUser?.role ?? null,
+    currentUserLocationId: input.currentUser?.locationId ?? null,
+    currentUserLocationLabel: input.currentUser?.locationId
+      ? getLocationLabel(input.currentUser.locationId)
+      : null,
+    backendCustomerCount: input.customers.length,
+    backendCsrCount: activeCsrs.length,
+    backendAssignmentCount: assignmentCount,
+    firstFiveCustomerNames: input.customers
+      .slice(0, 5)
+      .map((customer) => getCustomerDiagnosticName(customer)),
+  });
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function getBootstrapValidationReason(
+  bootstrap: unknown,
+): BootstrapValidationReason | null {
+  if (!isRecord(bootstrap)) {
+    return "invalidBootstrapShape";
+  }
+
+  if (!bootstrap.currentUser) {
+    return "missingCurrentUser";
+  }
+
+  if (!Array.isArray(bootstrap.capabilities)) {
+    return "missingCapabilities";
+  }
+
+  if (
+    !Array.isArray(bootstrap.reps) ||
+    !Array.isArray(bootstrap.customers) ||
+    !isRecord(bootstrap.slaSettings)
+  ) {
+    return "invalidBootstrapShape";
+  }
+
+  if (!isRecord(bootstrap.workflowState)) {
+    return "invalidWorkflowState";
+  }
+
+  const workflowState = bootstrap.workflowState;
+
+  if (
+    !Array.isArray(workflowState.reps) ||
+    typeof workflowState.currentRepId !== "string" ||
+    !isRecord(workflowState.threadStates) ||
+    !isRecord(workflowState.threadPresence) ||
+    !isRecord(workflowState.preferences)
+  ) {
+    return "invalidWorkflowState";
+  }
+
+  return null;
+}
+
+function logSharedWorkflowBootstrapValidation(input: {
+  context: string;
+  bootstrap: unknown;
+  reason: BootstrapValidationReason | "validBootstrap";
+}) {
+  const bootstrap = isRecord(input.bootstrap) ? input.bootstrap : {};
+  const workflowState = isRecord(bootstrap.workflowState)
+    ? bootstrap.workflowState
+    : {};
+  const metadata = {
+    context: input.context,
+    reason: input.reason,
+    currentUserExists: Boolean(bootstrap.currentUser),
+    capabilitiesCount: Array.isArray(bootstrap.capabilities)
+      ? bootstrap.capabilities.length
+      : 0,
+    repsCount: Array.isArray(bootstrap.reps) ? bootstrap.reps.length : 0,
+    workflowRepsCount: Array.isArray(workflowState.reps)
+      ? workflowState.reps.length
+      : 0,
+    customersCount: Array.isArray(bootstrap.customers)
+      ? bootstrap.customers.length
+      : 0,
+    hasSlaSettings: isRecord(bootstrap.slaSettings),
+    hasThreadStates: isRecord(workflowState.threadStates),
+    hasThreadPresence: isRecord(workflowState.threadPresence),
+    hasPreferences: isRecord(workflowState.preferences),
+  };
+
+  if (input.reason === "validBootstrap") {
+    console.info("[Action Desk session] bootstrap validation passed", metadata);
+    return;
+  }
+
+  console.warn("[Action Desk session] bootstrap validation failed", metadata);
+}
+
+function createBootstrapValidationError(reason: BootstrapValidationReason): Error {
+  const error = new Error(
+    "The shared workflow bootstrap response was missing required session data.",
+  );
+  error.name = "frontendValidationFailure";
+  Object.assign(error, {
+    code: "frontendValidationFailure",
+    reason,
+    retryable: true,
+  });
+  return error;
+}
+
+function validateSharedWorkflowBootstrap(
+  context: string,
+  bootstrap: SharedWorkflowBootstrap,
+) {
+  const reason = getBootstrapValidationReason(bootstrap);
+
+  logSharedWorkflowBootstrapValidation({
+    context,
+    bootstrap,
+    reason: reason ?? "validBootstrap",
+  });
+
+  if (reason) {
+    throw createBootstrapValidationError(reason);
+  }
+}
+
+function logSessionCleanup(input: {
+  context: string;
+  reason:
+    | "missingCurrentUser"
+    | "bootstrapException"
+    | "frontendValidationFailure"
+    | "userRequestedSignOut";
+  message?: string;
+}) {
+  console.warn("[Action Desk session] session cleanup requested", {
+    context: input.context,
+    reason: input.reason,
+    hasMessage: Boolean(input.message?.trim()),
+  });
+}
+
+function getBootstrapExceptionReason(error: unknown) {
+  if (
+    error &&
+    typeof error === "object" &&
+    "code" in error &&
+    String((error as { code?: unknown }).code) === "frontendValidationFailure"
+  ) {
+    return "frontendValidationFailure" as const;
+  }
+
+  return "bootstrapException" as const;
+}
+
+function getSafeErrorName(error: unknown): string {
+  return error instanceof Error ? error.name : typeof error;
+}
+
+function getAutoAssignmentSyncKey(
+  threads: WorkflowThread[],
+  workflowState: WorkflowState,
+): string {
+  return threads
+    .map((thread) => {
+      const state = workflowState.threadStates[thread.id];
+      const desiredAutoAssignment =
+        thread.currentAssignment?.type === "auto"
+          ? thread.currentAssignment
+          : undefined;
+      const persistedAutoAssignment = state?.autoAssignment;
+
+      return [
+        thread.id,
+        thread.locationId ?? "",
+        desiredAutoAssignment?.assignedRepId ?? "",
+        desiredAutoAssignment?.assignedRepName ?? "",
+        desiredAutoAssignment?.assignedAt ?? "",
+        persistedAutoAssignment?.assignedRepId ?? "",
+        persistedAutoAssignment?.assignedRepName ?? "",
+        persistedAutoAssignment?.assignedAt ?? "",
+        state?.manualAssignment?.assignedRepId ?? "",
+        state?.locationId ?? "",
+      ].join(":");
+    })
+    .join("|");
+}
+
+function getWorkflowThreadPersistenceKey(
+  threads: WorkflowThread[],
+  workflowState: WorkflowState,
+): string {
+  return threads
+    .map((thread) => {
+      const state = workflowState.threadStates[thread.id];
+
+      return [
+        thread.id,
+        thread.items.length,
+        state ? "persisted" : "missing",
+        state?.manualAssignment?.assignedRepId ?? "",
+        state?.autoAssignment?.assignedRepId ?? "",
+        state?.status ?? "",
+        thread.locationId ?? "",
+        thread.items
+          .map((item) =>
+            [
+              item.email.id,
+              item.email.workflowThreadId ? "bound" : "unbound",
+            ].join(":"),
+          )
+          .join(","),
+      ].join(":");
+    })
+    .join("|");
+}
+
+function createInitialWorkflowThreadState(
+  thread: WorkflowThread,
+): ThreadWorkflowState {
+  const autoAssignment =
+    thread.currentAssignment?.type === "auto"
+      ? thread.currentAssignment
+      : undefined;
+
+  return {
+    status: thread.status === "resolved" ? "resolved" : undefined,
+    locationId: thread.locationId,
+    autoAssignment,
+    assignmentHistory: [],
+    notes: [],
+    replyLog: [],
+  };
+}
+
+function getWorkflowThreadDiagnosticStatus(
+  thread: WorkflowThread,
+): "open" | "assigned" | "snoozed" | "resolved" {
+  if (thread.status === "resolved") {
+    return "resolved";
+  }
+
+  if (thread.isSnoozed || String(thread.status) === "snoozed") {
+    return "snoozed";
+  }
+
+  if (thread.assignmentResolution.assignmentStatus === "assigned") {
+    return "assigned";
+  }
+
+  return "open";
+}
+
+function getThreadRecordCount(workflowState: WorkflowState): number {
+  return Object.keys(workflowState.threadStates).length;
 }
 
 function getIssueCode(item: ProcessedEmail): IssueType | null {
@@ -290,6 +759,7 @@ export default function App() {
   );
   const [loading, setLoading] = useState(false);
   const [isLoadingInbox, setIsLoadingInbox] = useState(false);
+  const [isRefreshingInbox, setIsRefreshingInbox] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [inboxLoadError, setInboxLoadError] = useState<string | null>(null);
@@ -329,7 +799,8 @@ export default function App() {
     isElectron: boolean;
     isDev: boolean;
     userDataPath: string;
-    recommendedRepositoryBackend: "sqlite";
+    recommendedRepositoryBackend: "sqlite" | "api";
+    actionDeskApiUrl?: string | null;
     inboxSource?: string;
     appOrigin?: string | null;
     apiOrigin?: string | null;
@@ -349,6 +820,7 @@ export default function App() {
     repCount: number;
     threadCount: number;
     customerCount: number;
+    assignmentCount?: number;
     serverTime: string;
   } | null>(null);
   const [backupLoading, setBackupLoading] = useState(false);
@@ -363,9 +835,11 @@ export default function App() {
   const syncMessageTimeoutRef = useRef<number | null>(null);
   const isMountedRef = useRef(true);
   const savedCustomersRef = useRef(savedCustomers);
+  const adminUsersRef = useRef(adminUsers);
   const workflowStateRef = useRef(workflowState);
-  const lastFocusRefreshAtRef = useRef(0);
+  const inboxReloadReasonRef = useRef<InboxReloadReason>("initial");
   const activePresenceThreadIdRef = useRef<string | null>(null);
+  const inboxActionInFlightRef = useRef<"refresh" | "load_more" | null>(null);
   const nextInboxLoadInteractiveRef = useRef(false);
   const queueApplicationServiceRef = useRef<QueueApplicationService | null>(
     null,
@@ -384,19 +858,22 @@ export default function App() {
   }
 
   function saveCustomers(nextCustomers: SavedCustomer[]) {
-    savedCustomersRef.current = nextCustomers;
-    setSavedCustomers(nextCustomers);
+    const normalizedCustomers = normalizeSavedCustomers(nextCustomers);
+    savedCustomersRef.current = normalizedCustomers;
+    setSavedCustomers(normalizedCustomers);
     updateProcessedEmailCache((item) =>
-      applyCustomerPriority([item], nextCustomers)[0],
+      applyCustomerPriority([item], normalizedCustomers)[0],
     );
     setQueueItems((currentItems) =>
-      rematchLoadedQueueItems(currentItems, nextCustomers),
+      rematchLoadedQueueItems(currentItems, normalizedCustomers),
     );
   }
 
   function applyAdminUsers(nextUsers: ManagedUser[]) {
-    setAdminUsers(nextUsers);
-    const nextReps = mapManagedUsersToRepProfiles(nextUsers);
+    const normalizedUsers = normalizeManagedUsers(nextUsers);
+    adminUsersRef.current = normalizedUsers;
+    setAdminUsers(normalizedUsers);
+    const nextReps = mapManagedUsersToRepProfiles(normalizedUsers);
 
     setWorkflowState((current) => ({
       ...current,
@@ -409,9 +886,157 @@ export default function App() {
     }));
   }
 
+  function applyReturnedCustomers(
+    returnedCustomers?: SavedCustomer[],
+    savedCustomerId?: string,
+  ) {
+    if (!returnedCustomers) {
+      return null;
+    }
+
+    const normalizedReturnedCustomers = normalizeSavedCustomers(returnedCustomers);
+    const savedCustomer = savedCustomerId
+      ? normalizedReturnedCustomers.find((customer) => customer.id === savedCustomerId)
+      : undefined;
+    const nextCustomers = savedCustomer
+      ? [
+          savedCustomer,
+          ...normalizedReturnedCustomers.filter(
+            (customer) => customer.id !== savedCustomer.id,
+          ),
+        ]
+      : normalizedReturnedCustomers;
+
+    saveCustomers(nextCustomers);
+
+    return nextCustomers;
+  }
+
+  function mergeReturnedAdminUsers(returnedUsers?: ManagedUser[]) {
+    const normalizedReturnedUsers = normalizeManagedUsers(returnedUsers ?? []);
+
+    if (normalizedReturnedUsers.length === 0) {
+      return;
+    }
+
+    applyAdminUsers(
+      mergeById(adminUsersRef.current, normalizedReturnedUsers),
+    );
+  }
+
+  function applySettingsMutationReturnedData(
+    context: string,
+    options?: SettingsMutationRefreshOptions,
+    phase: "mutation_response" | "post_bootstrap" = "mutation_response",
+  ) {
+    if (!options) {
+      return;
+    }
+
+    let appliedCustomers: SavedCustomer[] | null = null;
+
+    if (options.clearCustomers) {
+      saveCustomers([]);
+      appliedCustomers = [];
+    } else if (options.returnedCustomers) {
+      appliedCustomers = applyReturnedCustomers(
+        options.returnedCustomers,
+        options.savedCustomerId,
+      );
+    } else if (options.removedCustomerId) {
+      const nextCustomers = savedCustomersRef.current.filter(
+        (customer) => customer.id !== options.removedCustomerId,
+      );
+      saveCustomers(nextCustomers);
+      appliedCustomers = nextCustomers;
+    }
+
+    mergeReturnedAdminUsers(options.returnedUsers);
+
+    if (appliedCustomers) {
+      console.info("[Action Desk settings] settingsStateApplied", {
+        context,
+        phase,
+        customersCount: appliedCustomers.length,
+        savedCustomerId: options.savedCustomerId,
+      });
+    }
+  }
+
+  function logSettingsDataRefreshed(
+    context: string,
+    options?: SettingsMutationRefreshOptions,
+  ) {
+    const assignmentsCount = savedCustomersRef.current.reduce(
+      (count, customer) =>
+        count +
+        (customer.assignedCSRs?.filter((assignment) => assignment.isActive !== false)
+          .length ??
+          customer.ownerRepIds?.length ??
+          (customer.ownerRepId ? 1 : 0)),
+      0,
+    );
+
+    console.info("[Action Desk settings] settingsDataRefreshed", {
+      context,
+      customersCount: savedCustomersRef.current.length,
+      usersCount: adminUsersRef.current.length,
+      assignmentsCount,
+      returnedCustomersCount: options?.returnedCustomers?.length ?? 0,
+      returnedUsersCount: options?.returnedUsers?.length ?? 0,
+    });
+  }
+
   async function refreshAdminUsers() {
     const usersResponse = await loadSharedUsers();
     applyAdminUsers(usersResponse.users);
+  }
+
+  function applySharedWorkflowBootstrap(
+    bootstrap: SharedWorkflowBootstrap,
+    context: string,
+  ) {
+    setAuthSession((current) => ({
+      sessionId: current.sessionId,
+      currentUser: bootstrap.currentUser,
+      capabilities: bootstrap.capabilities,
+    }));
+    setWorkflowState({
+      ...bootstrap.workflowState,
+      reps: normalizeRepProfiles(bootstrap.workflowState.reps, bootstrap.reps),
+    });
+    saveCustomers(bootstrap.customers);
+    setSlaSettings(bootstrap.slaSettings);
+    logSharedWorkflowDataDiagnostics({
+      context,
+      currentUser: bootstrap.currentUser,
+      customers: bootstrap.customers,
+      reps: bootstrap.workflowState.reps,
+      source: "backend_api",
+    });
+  }
+
+  async function reloadSharedWorkflowBootstrapAfterMutation(
+    context: string,
+    options?: SettingsMutationRefreshOptions,
+  ) {
+    applySettingsMutationReturnedData(context, options, "mutation_response");
+
+    const bootstrap = await loadSharedWorkflowBootstrap();
+    validateSharedWorkflowBootstrap(context, bootstrap);
+    applySharedWorkflowBootstrap(bootstrap, context);
+
+    if (
+      bootstrap.currentUser?.role === "admin" ||
+      bootstrap.capabilities.includes("manage_users")
+    ) {
+      await refreshAdminUsers();
+    } else {
+      setAdminUsers([]);
+    }
+
+    applySettingsMutationReturnedData(context, options, "post_bootstrap");
+    logSettingsDataRefreshed(context, options);
   }
 
   function applyWorkflowState(nextState: WorkflowState) {
@@ -552,6 +1177,10 @@ export default function App() {
   }, [savedCustomers]);
 
   useEffect(() => {
+    adminUsersRef.current = adminUsers;
+  }, [adminUsers]);
+
+  useEffect(() => {
     workflowStateRef.current = workflowState;
   }, [workflowState]);
 
@@ -598,10 +1227,33 @@ export default function App() {
           return;
         }
 
+        const boundThreadIds = Array.from(
+          new Set(Object.values(bindings).filter(Boolean)),
+        );
+        const missingBindingCount = itemsNeedingBindings.filter(
+          (item) => !bindings[item.email.id],
+        ).length;
+        console.info("[Action Desk diagnostics] workflow thread bindings", {
+          totalEmailsProcessed: queueItems.length,
+          threadCreated: boundThreadIds.length,
+          threadSkipped: missingBindingCount,
+          skipReason: missingBindingCount > 0 ? "missingBindingResponse" : undefined,
+          persistedThreadCount: getThreadRecordCount(workflowStateRef.current),
+          boundEmailCount: Object.keys(bindings).length,
+          unboundEmailCount: itemsNeedingBindings.length,
+        });
+
         setQueueItems((currentItems) =>
           applyWorkflowThreadBindings(currentItems, bindings),
         );
-      } catch {
+      } catch (error) {
+        console.warn("[Action Desk diagnostics] workflow thread bindings", {
+          threadCreated: false,
+          threadSkipped: true,
+          skipReason: "threadBindingSyncFailed",
+          errorName: getSafeErrorName(error),
+          persistedThreadCount: getThreadRecordCount(workflowStateRef.current),
+        });
         // Keep the queue usable even if the shared thread binding sync is unavailable.
       }
     }
@@ -637,18 +1289,34 @@ export default function App() {
         void refreshSharedHealth({ silent: true });
 
         if (!session.currentUser) {
-        setWorkflowState((current) => ({
-          ...current,
-          reps: session.reps.length > 0 ? session.reps : getDefaultRepProfiles(),
-          currentRepId: "",
-        }));
-        setSavedCustomers([]);
-        setSlaSettings(getDefaultSlaSettings());
-        setAdminUsers([]);
-        return;
+          logSessionCleanup({
+            context: "initial_auth_session",
+            reason: "missingCurrentUser",
+            message: session.authMessage,
+          });
+          setWorkflowState((current) => ({
+            ...current,
+            reps:
+              normalizeRepProfiles(session.reps).length > 0
+                ? normalizeRepProfiles(session.reps)
+                : getDefaultRepProfiles(),
+            currentRepId: "",
+          }));
+          setSavedCustomers([]);
+          setSlaSettings(getDefaultSlaSettings());
+          setAdminUsers([]);
+          logSharedWorkflowDataDiagnostics({
+            context: "signed_out_bootstrap",
+            currentUser: null,
+            customers: [],
+            reps: session.reps,
+            source: "signed_out",
+          });
+          return;
         }
 
         const bootstrap = await loadSharedWorkflowBootstrap();
+        validateSharedWorkflowBootstrap("initial_bootstrap", bootstrap);
 
         if (cancelled) {
           return;
@@ -659,10 +1327,23 @@ export default function App() {
           currentUser: bootstrap.currentUser,
           capabilities: bootstrap.capabilities,
         });
-        setWorkflowState(bootstrap.workflowState);
-        setSavedCustomers(bootstrap.customers);
+        setWorkflowState({
+          ...bootstrap.workflowState,
+          reps: normalizeRepProfiles(bootstrap.workflowState.reps, bootstrap.reps),
+        });
+        saveCustomers(bootstrap.customers);
         setSlaSettings(bootstrap.slaSettings);
-        if (!bootstrap.capabilities.includes("manage_users")) {
+        logSharedWorkflowDataDiagnostics({
+          context: "initial_bootstrap",
+          currentUser: bootstrap.currentUser,
+          customers: bootstrap.customers,
+          reps: bootstrap.workflowState.reps,
+          source: "backend_api",
+        });
+        if (
+          bootstrap.currentUser?.role !== "admin" &&
+          !bootstrap.capabilities.includes("manage_users")
+        ) {
           setAdminUsers([]);
         } else {
           try {
@@ -678,6 +1359,11 @@ export default function App() {
         void refreshSharedHealth({ silent: true });
       } catch (error) {
         if (!cancelled) {
+          console.warn("[Action Desk session] bootstrap failed", {
+            context: "initial_bootstrap",
+            reason: getBootstrapExceptionReason(error),
+            errorName: getSafeErrorName(error),
+          });
           setLoadError(
             getSharedWorkflowErrorMessage(
               error,
@@ -702,14 +1388,9 @@ export default function App() {
   const currentRep = authSession.currentUser;
   const showDebugUi = getEnv("VITE_SHOW_DEBUG_UI") === "true";
   const demoDataEnabled = getEnv("ACTION_DESK_ENABLE_DEMO_DATA") === "true";
-  const visibleSettingsCustomers = currentRep
-    ? getVisibleCustomersForSettings(
-        savedCustomers,
-        currentRep,
-        authSession.capabilities.includes("manage_customer_ownership"),
-      )
-    : [];
-  const canManageUsers = authSession.capabilities.includes("manage_users");
+  const canManageUsers =
+    authSession.currentUser?.role === "admin" ||
+    authSession.capabilities.includes("manage_users");
   const diagnosticsProps = currentRep?.role === "admin"
     ? {
         apiAvailable: sharedHealth?.ok ?? false,
@@ -771,12 +1452,30 @@ export default function App() {
     try {
       const session = await signInSharedWorkflow();
       const bootstrap = await loadSharedWorkflowBootstrap();
+      validateSharedWorkflowBootstrap("sign_in_bootstrap", bootstrap);
 
-      setAuthSession(session);
-      setWorkflowState(bootstrap.workflowState);
-      setSavedCustomers(bootstrap.customers);
+      setAuthSession({
+        sessionId: session.sessionId,
+        currentUser: bootstrap.currentUser,
+        capabilities: bootstrap.capabilities,
+      });
+      setWorkflowState({
+        ...bootstrap.workflowState,
+        reps: normalizeRepProfiles(bootstrap.workflowState.reps, bootstrap.reps),
+      });
+      saveCustomers(bootstrap.customers);
       setSlaSettings(bootstrap.slaSettings);
-      if (!bootstrap.capabilities.includes("manage_users")) {
+      logSharedWorkflowDataDiagnostics({
+        context: "sign_in_bootstrap",
+        currentUser: bootstrap.currentUser,
+        customers: bootstrap.customers,
+        reps: bootstrap.workflowState.reps,
+        source: "backend_api",
+      });
+      if (
+        bootstrap.currentUser?.role !== "admin" &&
+        !bootstrap.capabilities.includes("manage_users")
+      ) {
         setAdminUsers([]);
       } else {
         try {
@@ -788,6 +1487,11 @@ export default function App() {
       markSyncSuccess("Signed in to the shared workflow.");
       void refreshSharedHealth({ silent: true });
     } catch (error) {
+      console.warn("[Action Desk session] bootstrap failed", {
+        context: "sign_in_bootstrap",
+        reason: getBootstrapExceptionReason(error),
+        errorName: getSafeErrorName(error),
+      });
       markSyncFailure(error, "Sign-in failed. Please try again.");
       throw error;
     }
@@ -795,6 +1499,10 @@ export default function App() {
 
   async function handleSharedSignOut() {
     try {
+      logSessionCleanup({
+        context: "handleSharedSignOut",
+        reason: "userRequestedSignOut",
+      });
       await clearCurrentUserPresence();
       await signOutSharedWorkflow();
       const session = await loadAuthSession();
@@ -806,7 +1514,10 @@ export default function App() {
       });
       setWorkflowState((current) => ({
         ...current,
-        reps: session.reps.length > 0 ? session.reps : getDefaultRepProfiles(),
+        reps:
+          normalizeRepProfiles(session.reps).length > 0
+            ? normalizeRepProfiles(session.reps)
+            : getDefaultRepProfiles(),
         currentRepId: "",
         threadStates: {},
         threadPresence: {},
@@ -814,6 +1525,8 @@ export default function App() {
       setSavedCustomers([]);
       setSlaSettings(getDefaultSlaSettings());
       setAdminUsers([]);
+      inboxActionInFlightRef.current = null;
+      setIsRefreshingInbox(false);
       setQueueItems([]);
       setSelectedEmailId(undefined);
       setShowSettingsPanel(false);
@@ -825,6 +1538,11 @@ export default function App() {
   }
 
   async function resetToSignedOutState(message?: string) {
+    logSessionCleanup({
+      context: "resetToSignedOutState",
+      reason: "bootstrapException",
+      message,
+    });
     clearStoredSharedWorkflowSession();
     const session = await loadAuthSession().catch(() => ({
       sessionId: "",
@@ -840,7 +1558,10 @@ export default function App() {
     });
     setWorkflowState((current) => ({
       ...current,
-      reps: session.reps.length > 0 ? session.reps : getDefaultRepProfiles(),
+      reps:
+        normalizeRepProfiles(session.reps).length > 0
+          ? normalizeRepProfiles(session.reps)
+          : getDefaultRepProfiles(),
       currentRepId: "",
       threadStates: {},
       threadPresence: {},
@@ -848,6 +1569,8 @@ export default function App() {
     setSavedCustomers([]);
     setSlaSettings(getDefaultSlaSettings());
     setAdminUsers([]);
+    inboxActionInFlightRef.current = null;
+    setIsRefreshingInbox(false);
     setQueueItems([]);
     setSelectedEmailId(undefined);
     setShowSettingsPanel(false);
@@ -1099,7 +1822,9 @@ export default function App() {
   async function handleCreateUserAccess(draft: ManagedUserDraft) {
     try {
       const response = await createSharedUser(draft);
-      applyAdminUsers(response.users);
+      await reloadSharedWorkflowBootstrapAfterMutation("create_user_access", {
+        returnedUsers: response.users,
+      });
       markSyncSuccess("User access was added.");
     } catch (error) {
       markSyncFailure(error, "The user could not be added right now.");
@@ -1116,12 +1841,8 @@ export default function App() {
   }) {
     try {
       const response = await updateSharedUserAccess(payload);
-      applyAdminUsers(response.users);
-      const session = await loadAuthSession();
-      setAuthSession({
-        sessionId: session.sessionId,
-        currentUser: session.currentUser,
-        capabilities: session.capabilities,
+      await reloadSharedWorkflowBootstrapAfterMutation("update_user_access", {
+        returnedUsers: response.users,
       });
       markSyncSuccess("User access was updated.");
     } catch (error) {
@@ -1132,12 +1853,8 @@ export default function App() {
   async function handleDeactivateUserAccess(userId: string) {
     try {
       const response = await deactivateSharedUser(userId);
-      applyAdminUsers(response.users);
-      const session = await loadAuthSession();
-      setAuthSession({
-        sessionId: session.sessionId,
-        currentUser: session.currentUser,
-        capabilities: session.capabilities,
+      await reloadSharedWorkflowBootstrapAfterMutation("deactivate_user_access", {
+        returnedUsers: response.users,
       });
       markSyncSuccess("User access was updated.");
     } catch (error) {
@@ -1157,6 +1874,80 @@ export default function App() {
     let cachedProcessedCount = 0;
     const processedIds = new Set<string>();
     const uncachedEmails: EmailItem[] = [];
+    const queuedProcessedItems: ProcessedEmail[] = [];
+    let queuedProcessingStatus: string | undefined;
+    let queueFlushTimerId: number | null = null;
+
+    function clearQueueFlushTimer() {
+      if (queueFlushTimerId === null) {
+        return;
+      }
+
+      window.clearTimeout(queueFlushTimerId);
+      queueFlushTimerId = null;
+    }
+
+    function flushQueuedProcessedItems() {
+      clearQueueFlushTimer();
+
+      const itemsToFlush = queuedProcessedItems.splice(
+        0,
+        queuedProcessedItems.length,
+      );
+      const processingStatusToApply = queuedProcessingStatus;
+      queuedProcessingStatus = undefined;
+
+      if (!isMountedRef.current) {
+        return;
+      }
+
+      if (itemsToFlush.length > 0) {
+        const flushedItemIds = new Set(
+          itemsToFlush.map((item) => item.email.id),
+        );
+
+        setQueueItems((currentItems) => {
+          const withoutDuplicates = currentItems.filter(
+            (item) => !flushedItemIds.has(item.email.id),
+          );
+
+          return decorateQueueItems([...withoutDuplicates, ...itemsToFlush]);
+        });
+
+        if (!options?.append) {
+          const firstFlushedItemId = itemsToFlush[0]?.email.id;
+
+          if (firstFlushedItemId) {
+            setSelectedEmailId(
+              (currentSelectedEmailId) =>
+                currentSelectedEmailId ?? firstFlushedItemId,
+            );
+          }
+        }
+      }
+
+      if (processingStatusToApply) {
+        setProcessingStatus(processingStatusToApply);
+      }
+    }
+
+    function queueProcessedItemForFlush(item: ProcessedEmail) {
+      queuedProcessedItems.push(item);
+      queuedProcessingStatus =
+        `${options?.statusPrefix ?? "Processing inbox emails"}: ${settledCount} of ${inboxEmails.length} completed.`;
+
+      if (queuedProcessedItems.length >= QUEUE_PROCESSING_FLUSH_BATCH_SIZE) {
+        flushQueuedProcessedItems();
+        return;
+      }
+
+      if (queueFlushTimerId === null) {
+        queueFlushTimerId = window.setTimeout(() => {
+          queueFlushTimerId = null;
+          flushQueuedProcessedItems();
+        }, QUEUE_PROCESSING_FLUSH_INTERVAL_MS);
+      }
+    }
 
     for (const inboxEmail of inboxEmails) {
       const cachedItem = getCachedProcessedEmail(inboxEmail.id);
@@ -1178,69 +1969,45 @@ export default function App() {
       settledCount += 1;
       cachedProcessedCount += 1;
       processedIds.add(prioritizedCachedItem.email.id);
-      setQueueItems((currentItems) => {
-        const withoutDuplicate = currentItems.filter(
-          (item) => item.email.id !== prioritizedCachedItem.email.id,
-        );
-
-        return decorateQueueItems([...withoutDuplicate, prioritizedCachedItem]);
-      });
-      setProcessingStatus(
-        `${options?.statusPrefix ?? "Processing inbox emails"}: ${settledCount} of ${inboxEmails.length} completed.`,
-      );
-      if (!options?.append) {
-        setSelectedEmailId(
-          (currentSelectedEmailId) =>
-            currentSelectedEmailId ?? prioritizedCachedItem.email.id,
-        );
-      }
+      queueProcessedItemForFlush(prioritizedCachedItem);
     }
 
     if (uncachedEmails.length === 0) {
+      flushQueuedProcessedItems();
+
       return {
         processedCount: cachedProcessedCount,
         failedCount: 0,
       };
     }
 
-    const result = await processEmailsProgressively(uncachedEmails, {
-      onItemProcessed: (processedItem) => {
-        if (
-          !isMountedRef.current ||
-          processedIds.has(processedItem.email.id)
-        ) {
-          return;
-        }
+    const result = await (async () => {
+      try {
+        return await processEmailsProgressively(uncachedEmails, {
+          customers: savedCustomersRef.current,
+          onItemProcessed: (processedItem) => {
+            if (
+              !isMountedRef.current ||
+              processedIds.has(processedItem.email.id)
+            ) {
+              return;
+            }
 
-        settledCount += 1;
-        processedIds.add(processedItem.email.id);
-        const prioritizedProcessedItem =
-          decorateQueueItems([processedItem])[0];
+            settledCount += 1;
+            processedIds.add(processedItem.email.id);
+            const prioritizedProcessedItem =
+              decorateQueueItems([processedItem])[0];
 
-        if (prioritizedProcessedItem.status === "processed") {
-          setCachedProcessedEmail(prioritizedProcessedItem);
-        }
-        setQueueItems((currentItems) => {
-          const withoutDuplicate = currentItems.filter(
-            (item) => item.email.id !== prioritizedProcessedItem.email.id,
-          );
-
-          return decorateQueueItems([
-            ...withoutDuplicate,
-            prioritizedProcessedItem,
-          ]);
+            if (prioritizedProcessedItem.status === "processed") {
+              setCachedProcessedEmail(prioritizedProcessedItem);
+            }
+            queueProcessedItemForFlush(prioritizedProcessedItem);
+          },
         });
-        setProcessingStatus(
-          `${options?.statusPrefix ?? "Processing inbox emails"}: ${settledCount} of ${inboxEmails.length} completed.`,
-        );
-        if (!options?.append) {
-          setSelectedEmailId(
-            (currentSelectedEmailId) =>
-              currentSelectedEmailId ?? prioritizedProcessedItem.email.id,
-          );
-        }
-      },
-    });
+      } finally {
+        flushQueuedProcessedItems();
+      }
+    })();
 
     return {
       processedCount: cachedProcessedCount + result.processedCount,
@@ -1259,6 +2026,10 @@ export default function App() {
 
       isMountedRef.current = true;
       let isMounted = true;
+      const reloadReason = inboxReloadReasonRef.current;
+      const shouldPreserveQueueDuringLoad =
+        reloadReason === "manual_refresh";
+      inboxReloadReasonRef.current = "initial";
 
       async function loadQueue() {
         const shouldUseInteractiveAuth =
@@ -1269,13 +2040,22 @@ export default function App() {
 
         setLoading(true);
         setIsLoadingInbox(true);
+        setIsRefreshingInbox(shouldPreserveQueueDuringLoad);
         setLoadError(null);
         setInboxLoadError(null);
         setLoadMoreError(null);
-        setNextCursor(undefined);
-        setProcessingStatus("Loading inbox emails.");
-        setQueueItems([]);
-        setSelectedEmailId(undefined);
+        if (!shouldPreserveQueueDuringLoad) {
+          setNextCursor(undefined);
+        }
+        setProcessingStatus(
+          shouldPreserveQueueDuringLoad
+            ? "Refreshing inbox emails."
+            : "Loading inbox emails.",
+        );
+        if (!shouldPreserveQueueDuringLoad) {
+          setQueueItems([]);
+          setSelectedEmailId(undefined);
+        }
 
         try {
           if (persistedQueueEnabled) {
@@ -1290,6 +2070,8 @@ export default function App() {
               setIsLoadingInbox,
               setLoading,
               isMounted,
+              useHeadStart: !shouldPreserveQueueDuringLoad,
+              selectFirstItem: !shouldPreserveQueueDuringLoad,
             });
 
             if (!loadResult) {
@@ -1327,9 +2109,7 @@ export default function App() {
             return;
           }
 
-          setProcessingStatus(
-            "Processing inbox emails and generating AI analysis.",
-          );
+          setProcessingStatus("Processing inbox emails and preparing triage.");
 
           const { processedCount, failedCount } = await processInboxEmailBatch(
             inboxEmails,
@@ -1358,8 +2138,10 @@ export default function App() {
             }
 
             console.error("Load queue error:", error);
-            setQueueItems([]);
-            setSelectedEmailId(undefined);
+            if (!shouldPreserveQueueDuringLoad) {
+              setQueueItems([]);
+              setSelectedEmailId(undefined);
+            }
             setInboxLoadError(
               getErrorMessage(
                 error,
@@ -1372,6 +2154,10 @@ export default function App() {
         } finally {
           if (isMounted) {
             setLoading(false);
+            setIsRefreshingInbox(false);
+            if (inboxActionInFlightRef.current === "refresh") {
+              inboxActionInFlightRef.current = null;
+            }
           }
         }
       }
@@ -1452,30 +2238,6 @@ export default function App() {
       savePilotQueueStateMap(pilotItemStates);
     }, [pilotItemStates, pilotMode]);
 
-    useEffect(() => {
-      function handleWindowFocus() {
-        const now = Date.now();
-
-        if (
-          loading ||
-          isLoadingInbox ||
-          isLoadingMore ||
-          now - lastFocusRefreshAtRef.current < 5000
-        ) {
-          return;
-        }
-
-        lastFocusRefreshAtRef.current = now;
-        setReloadToken((current) => current + 1);
-      }
-
-      window.addEventListener("focus", handleWindowFocus);
-
-      return () => {
-        window.removeEventListener("focus", handleWindowFocus);
-      };
-    }, [loading, isLoadingInbox, isLoadingMore]);
-
     function updatePilotQueueState(
       updater: (current: PilotQueueStateMap) => PilotQueueStateMap,
     ) {
@@ -1510,16 +2272,16 @@ export default function App() {
       );
     }
 
-    async function handleCopyReply() {
+    async function handleCopyReply(): Promise<boolean> {
       if (!selectedItem || selectedItem.status !== "processed" || !hasReplyDraft) {
-        return;
+        return false;
       }
 
       setReplyActionError(null);
 
       if (!navigator.clipboard?.writeText) {
         resetFeedbackWithDelay(setCopyFeedback, copyFeedbackTimeoutRef, "error");
-        return;
+        return false;
       }
 
       try {
@@ -1529,8 +2291,10 @@ export default function App() {
           copyFeedbackTimeoutRef,
           "success",
         );
+        return true;
       } catch {
         resetFeedbackWithDelay(setCopyFeedback, copyFeedbackTimeoutRef, "error");
+        return false;
       }
     }
 
@@ -1614,9 +2378,19 @@ export default function App() {
       if (
         !selectedItem ||
         selectedItem.status !== "processed" ||
-        !selectedItem.result ||
-        regeneratingReply
+        !selectedItem.result
       ) {
+        setReplyActionError(
+          "Select a processed email before regenerating a reply draft.",
+        );
+        console.warn("Action Desk reply regeneration skipped", {
+          hasSelectedEmailId: Boolean(selectedEmailId),
+          selectedItemStatus: selectedItem?.status,
+        });
+        return;
+      }
+
+      if (regeneratingReply) {
         return;
       }
 
@@ -1624,17 +2398,46 @@ export default function App() {
       setCopyFeedback("idle");
       setReplyActionError(null);
 
+      const generationContext = buildReplyGenerationContext(
+        selectedItem,
+        selectedThread,
+      );
+      const logContext = getReplyRegenerationLogContext(
+        selectedItem,
+        generationContext,
+      );
+
+      console.info("Action Desk reply regeneration started", logContext);
+
       try {
         const nextReplyDraft = generateReply(
           selectedItem.result.analysis,
           selectedItem.result.orderContext,
+          {
+            allowDeterministicFallback: true,
+            context: generationContext,
+          },
         );
+        const trimmedReplyDraft = nextReplyDraft.trim();
+
+        if (!trimmedReplyDraft) {
+          const unavailableReason = getReplyUnavailableReason(
+            selectedItem.result.analysis,
+          );
+
+          console.warn("Action Desk reply regeneration unavailable", {
+            ...logContext,
+            unavailableReason,
+          });
+          setReplyActionError(getReplyUnavailableMessage(unavailableReason));
+          return;
+        }
 
         setQueueItems((currentItems) => {
           const nextItems = refreshProcessedEmailReplyDraft(
             currentItems,
             selectedItem.email.id,
-            nextReplyDraft,
+            trimmedReplyDraft,
           );
           const prioritizedItems = decorateQueueItems(nextItems);
           const nextSelectedItem = prioritizedItems.find(
@@ -1647,37 +2450,70 @@ export default function App() {
 
           return prioritizedItems;
         });
-      } catch {
-        setReplyActionError(
+
+        console.info("Action Desk reply regeneration completed", {
+          ...logContext,
+          replyDraftLength: trimmedReplyDraft.length,
+        });
+      } catch (error) {
+        console.error("Action Desk reply regeneration failed", {
+          ...logContext,
+          errorName: getSafeErrorName(error),
+        });
+        setReplyActionError(getErrorMessage(
+          error,
           "The reply could not be regenerated right now. Please try again.",
-        );
+        ));
       } finally {
         setRegeneratingReply(false);
       }
     }
 
     function handleRefreshInbox() {
-      if (loading || isLoadingInbox) {
+      if (
+        loading ||
+        isLoadingInbox ||
+        isLoadingMore ||
+        inboxActionInFlightRef.current !== null
+      ) {
         return;
       }
 
       setInboxLoadError(null);
       setLoadError(null);
       setLoadMoreError(null);
-      setProcessingStatus("Loading inbox emails...");
+      const reloadReason =
+        hasAttemptedInboxLoad && queueItems.length > 0
+          ? "manual_refresh"
+          : "initial";
+      setProcessingStatus(
+        reloadReason === "manual_refresh"
+          ? "Refreshing inbox emails..."
+          : "Loading inbox emails...",
+      );
       setLoading(true);
       setIsLoadingInbox(true);
+      setIsRefreshingInbox(reloadReason === "manual_refresh");
 
+      inboxActionInFlightRef.current = "refresh";
       nextInboxLoadInteractiveRef.current = true;
+      inboxReloadReasonRef.current = reloadReason;
       setHasAttemptedInboxLoad(true);
       setReloadToken((current) => current + 1);
     }
 
     async function handleLoadMore() {
-      if (!nextCursor || isLoadingMore || isLoadingInbox || loading) {
+      if (
+        !nextCursor ||
+        isLoadingMore ||
+        isLoadingInbox ||
+        loading ||
+        inboxActionInFlightRef.current !== null
+      ) {
         return;
       }
 
+      inboxActionInFlightRef.current = "load_more";
       setIsLoadingMore(true);
       setLoadMoreError(null);
 
@@ -1752,6 +2588,9 @@ export default function App() {
         );
       } finally {
         setIsLoadingMore(false);
+        if (inboxActionInFlightRef.current === "load_more") {
+          inboxActionInFlightRef.current = null;
+        }
       }
     }
 
@@ -1814,8 +2653,11 @@ export default function App() {
       }
 
       try {
-        const nextCustomers = await upsertSharedCustomer(draft);
-        saveCustomers(nextCustomers);
+        const customers = await upsertSharedCustomer(draft);
+        await reloadSharedWorkflowBootstrapAfterMutation("save_customer", {
+          returnedCustomers: customers,
+          savedCustomerId: findSavedCustomerIdFromDraft(draft, customers),
+        });
         markSyncSuccess("Customer ownership was saved.");
       } catch (error) {
         markSyncFailure(error, "Customer settings could not be saved right now.");
@@ -1834,8 +2676,12 @@ export default function App() {
 
     async function handleDeleteCustomer(customerId: string) {
       try {
-        const nextCustomers = await deleteSharedCustomer(customerId);
-        saveCustomers(nextCustomers);
+        const customers = await deleteSharedCustomer(customerId);
+        await reloadSharedWorkflowBootstrapAfterMutation("deactivate_customer", {
+          returnedCustomers: customers,
+          savedCustomerId: customerId,
+          removedCustomerId: customerId,
+        });
         markSyncSuccess("Customer ownership was updated.");
       } catch (error) {
         markSyncFailure(error, "Customer settings could not be updated right now.");
@@ -1852,8 +2698,11 @@ export default function App() {
       }
 
       try {
-        const nextCustomers = await clearSharedCustomers();
-        saveCustomers(nextCustomers);
+        const customers = await clearSharedCustomers();
+        await reloadSharedWorkflowBootstrapAfterMutation("clear_customers", {
+          returnedCustomers: customers,
+          clearCustomers: true,
+        });
         markSyncSuccess("Customer ownership was cleared.");
       } catch (error) {
         markSyncFailure(error, "Customers could not be cleared right now.");
@@ -1910,6 +2759,43 @@ export default function App() {
         workflowStateRef.current,
         threadId,
         currentRep,
+        reason,
+        currentRep.id,
+      );
+      await persistThreadStateOptimistically(
+        threadId,
+        nextState,
+        "Manual assignment was saved.",
+        "Manual assignment could not be saved right now. Your change was rolled back.",
+      );
+    }
+
+    async function handleAssignThread(threadId: string, repId: string) {
+      if (!currentRep) {
+        return;
+      }
+
+      const assignee = workflowStateRef.current.reps.find(
+        (rep) => rep.id === repId && rep.role === "rep" && rep.isActive !== false,
+      );
+
+      if (!assignee) {
+        setReplyActionError("That assigned rep is not available.");
+        return;
+      }
+
+      const thread = workflowThreads.find((candidate) => candidate.id === threadId);
+      const reason: AssignmentReason =
+        thread?.assignmentResolution.assignmentStatus === "unassigned"
+          ? "Unassigned"
+          : "Covering for colleague";
+
+      showPresenceConflictWarning(threadId);
+      void updateThreadPresence(threadId, "working");
+      const nextState = takeThreadAssignment(
+        workflowStateRef.current,
+        threadId,
+        assignee,
         reason,
         currentRep.id,
       );
@@ -2128,7 +3014,8 @@ export default function App() {
     const queueScopeItems =
       queueView === "customer_service"
         ? activePilotQueueItems.filter((item) =>
-          shouldShowInCustomerServiceQueue(item),
+          shouldShowInCustomerServiceQueue(item) &&
+          !isSuppressibleSystemReportMissingBodyFailure(item),
         )
         : activePilotQueueItems;
     const queueViewFilteredItems = pilotMode
@@ -2163,9 +3050,17 @@ export default function App() {
           currentRep,
         )
       : workflowState.preferences.queueScopeView;
-    // TODO: MariaDB ticket ingestion exists, but this visible feed still builds
+    const bypassAssignmentScope = queueView === "all_inbox";
+    // TODO: Backend ticket ingestion exists, but this visible feed still builds
     // from inbox/mock/persisted queue items plus shared workflow settings. Add a
-    // ticket-feed adapter at this boundary before switching cards to MariaDB tickets.
+    // ticket-feed adapter at this boundary before switching cards to backend tickets.
+    const assignmentSyncThreads = buildWorkflowThreads({
+      items: queueItems,
+      workflowState,
+      customers: savedCustomers,
+      slaSettings,
+      now,
+    });
     const workflowThreads = buildWorkflowThreads({
       items: issueFilteredQueueItems,
       workflowState,
@@ -2173,6 +3068,14 @@ export default function App() {
       slaSettings,
       now,
     });
+    const autoAssignmentSyncKey = getAutoAssignmentSyncKey(
+      assignmentSyncThreads,
+      workflowState,
+    );
+    const workflowThreadPersistenceKey = getWorkflowThreadPersistenceKey(
+      assignmentSyncThreads,
+      workflowState,
+    );
     const supervisorVisibilityEnabled = canViewSupervisorVisibility(currentRep);
     const locationScopedReps = currentRep
       ? workflowState.reps.filter((rep) =>
@@ -2192,6 +3095,7 @@ export default function App() {
           queueScopeView: safeQueueScopeView,
           statusFilter: "all",
           searchQuery: "",
+          bypassAssignmentScope,
         })
       : workflowThreads;
     const statusScopedWorkflowThreads = currentRep
@@ -2201,6 +3105,7 @@ export default function App() {
           queueScopeView: safeQueueScopeView,
           statusFilter: workflowState.preferences.statusFilter,
           searchQuery: "",
+          bypassAssignmentScope,
         })
       : workflowThreads;
     const scopedWorkflowThreads = supervisorVisibilityEnabled
@@ -2247,11 +3152,19 @@ export default function App() {
       highPriority: queueScopeItems.filter(
         (item) => item.status === "processed" && (item.result?.priorityScore ?? 0) >= 70,
       ).length,
-      failed: queueScopeItems.filter((item) => item.status === "failed").length,
+      failed: queueScopeItems.filter(
+        (item) =>
+          item.status === "failed" &&
+          !isSuppressibleSystemReportMissingBodyFailure(item),
+      ).length,
       processing: queueScopeItems.filter((item) => item.status === "pending").length,
     };
 
     const totalLoadedEmails = queueItems.length;
+    const analyzedCount = queueItems.filter(
+      (item) => item.status === "processed",
+    ).length;
+    const persistedThreadCount = getThreadRecordCount(workflowState);
     const visibleEmailCount = visibleThreads.length;
     const hiddenEmailCount = Math.max(0, workflowThreads.length - visibleEmailCount);
     const topIssues = Array.from(
@@ -2298,6 +3211,24 @@ export default function App() {
       displayThreads,
       selectedEmailId,
     );
+    const workflowVisibilityDiagnosticsKey = [
+      totalLoadedEmails,
+      analyzedCount,
+      assignmentSyncThreads.length,
+      workflowThreads.length,
+      scopedWorkflowThreads.length,
+      visibleThreads.length,
+      persistedThreadCount,
+      queueView,
+      safeQueueScopeView,
+      bypassAssignmentScope ? "bypass_assignment" : "scoped_assignment",
+      workflowState.preferences.statusFilter,
+      workflowState.preferences.showSnoozed ? "show_snoozed" : "hide_snoozed",
+      supervisorQuickFilter,
+      currentRep?.id ?? "no_rep",
+      currentRep?.role ?? "no_role",
+      currentRep?.locationId ?? "no_location",
+    ].join("|");
     const isSinglePaneWorkspace = viewportWidth < 980;
     const isCompactWorkspace = viewportWidth < 1320;
     const detailPaneVisible = !isSinglePaneWorkspace || showDetailView;
@@ -2326,6 +3257,355 @@ export default function App() {
           ? "No live inbox emails are available right now. Seeded demo emails are hidden in pilot mode."
           : undefined;
     const needsMicrosoftSignIn = inboxLoadError === SIGN_IN_REQUIRED_MESSAGE;
+
+    useEffect(() => {
+      if (!import.meta.env.DEV || !currentRep) {
+        return;
+      }
+
+      console.info("[Action Desk diagnostics] workload CSR load", {
+        source: "backend_users",
+        currentUserRole: currentRep.role,
+        currentUserLocationId: currentRep.locationId ?? null,
+        totalRepProfilesLoaded: workflowState.reps.length,
+        activeCsrCountLoaded: workflowState.reps.filter(
+          (rep) => rep.role === "rep" && rep.isActive !== false,
+        ).length,
+        workloadCsrCount: workloadVisibleReps.length,
+      });
+    }, [
+      currentRep?.id,
+      currentRep?.locationId,
+      currentRep?.role,
+      workloadVisibleReps.length,
+      workflowState.reps,
+    ]);
+
+    useEffect(() => {
+      if (!import.meta.env.DEV || !selectedThread) {
+        return;
+      }
+
+      const assignmentResolution = selectedThread.assignmentResolution;
+      const selectedCustomerMatch = selectedThread.representativeItem.customerMatch;
+
+      console.info("[Action Desk diagnostics] selected card assignment", {
+        threadId: selectedThread.id,
+        emailId: selectedThread.representativeItem.email.id,
+        senderEmail: selectedThread.representativeItem.email.senderEmail,
+        customerMatch: selectedCustomerMatch
+          ? {
+              customerId: selectedCustomerMatch.customerId,
+              customerName: selectedCustomerMatch.customerName,
+              matchedOn: selectedCustomerMatch.matchedOn,
+            }
+          : null,
+        assignmentStatus: assignmentResolution.assignmentStatus,
+        assignmentSource: assignmentResolution.assignmentSource,
+        customerSource:
+          assignmentResolution.customerId || selectedCustomerMatch?.customerId
+            ? "backend_customers"
+            : "none",
+        csrSource:
+          assignmentResolution.assignedRepIds.length > 0
+            ? "backend_customer_csr_assignments"
+            : "none",
+        matchType: assignmentResolution.matchType,
+        customerId: assignmentResolution.customerId,
+        customerName: assignmentResolution.customerName,
+        primaryRepId: assignmentResolution.primaryRepId,
+        primaryRepName: assignmentResolution.primaryRepName,
+        assignedRepIds: assignmentResolution.assignedRepIds,
+        currentUserRole: currentRep?.role ?? null,
+        currentUserLocationId: currentRep?.locationId ?? null,
+        loadedCustomersCount: savedCustomers.length,
+      });
+    }, [
+      currentRep?.locationId,
+      currentRep?.role,
+      savedCustomers.length,
+      selectedThread?.assignmentResolution.assignmentSource,
+      selectedThread?.assignmentResolution.assignmentStatus,
+      selectedThread?.assignmentResolution.customerId,
+      selectedThread?.assignmentResolution.customerName,
+      selectedThread?.assignmentResolution.matchType,
+      selectedThread?.assignmentResolution.primaryRepId,
+      selectedThread?.id,
+      selectedThread?.representativeItem.customerMatch?.customerId,
+      selectedThread?.representativeItem.customerMatch?.matchedOn,
+      selectedThread?.representativeItem.email.id,
+    ]);
+
+    useEffect(() => {
+      if (!currentRep || assignmentSyncThreads.length === 0) {
+        return;
+      }
+
+      let cancelled = false;
+
+      async function persistMissingWorkflowThreadRecords() {
+        const savedEntries: Array<{
+          threadId: string;
+          threadState: ThreadWorkflowState;
+        }> = [];
+        const skipCounts = new Map<string, number>();
+
+        function recordSkip(skipReason: string) {
+          skipCounts.set(skipReason, (skipCounts.get(skipReason) ?? 0) + 1);
+        }
+
+        for (const thread of assignmentSyncThreads) {
+          const missingBindingEmailIds = thread.items
+            .filter((item) => !item.email.workflowThreadId)
+            .map((item) => item.email.id);
+
+          if (!thread.id) {
+            recordSkip("missingThreadId");
+            console.info("[Action Desk diagnostics] workflow thread", {
+              threadCreated: false,
+              threadSkipped: true,
+              skipReason: "missingThreadId",
+              persistedThreadCount: getThreadRecordCount(workflowStateRef.current),
+              visibleThreadCount: visibleThreads.length,
+            });
+            continue;
+          }
+
+          if (missingBindingEmailIds.length > 0) {
+            recordSkip("missingWorkflowThreadBinding");
+            console.info("[Action Desk diagnostics] workflow thread", {
+              threadCreated: false,
+              threadSkipped: true,
+              skipReason: "missingWorkflowThreadBinding",
+              threadId: thread.id,
+              missingBindingEmailIds,
+              persistedThreadCount: getThreadRecordCount(workflowStateRef.current),
+              visibleThreadCount: visibleThreads.length,
+            });
+            continue;
+          }
+
+          if (workflowStateRef.current.threadStates[thread.id]) {
+            recordSkip("alreadyPersisted");
+            continue;
+          }
+
+          const threadState = createInitialWorkflowThreadState(thread);
+
+          try {
+            const savedThreadState = await saveSharedThreadState(
+              thread.id,
+              threadState,
+            );
+
+            if (cancelled) {
+              return;
+            }
+
+            savedEntries.push({
+              threadId: thread.id,
+              threadState: savedThreadState,
+            });
+            console.info("[Action Desk diagnostics] workflow thread", {
+              threadCreated: true,
+              threadSkipped: false,
+              threadId: thread.id,
+              effectiveStatus: getWorkflowThreadDiagnosticStatus(thread),
+              assignmentStatus: thread.assignmentResolution.assignmentStatus,
+              assignedRepIds: thread.assignmentResolution.assignedRepIds,
+              persistedThreadCount:
+                getThreadRecordCount(workflowStateRef.current) +
+                savedEntries.length,
+              visibleThreadCount: visibleThreads.length,
+            });
+          } catch (error) {
+            recordSkip("persistenceFailed");
+            console.warn("[Action Desk diagnostics] workflow thread", {
+              threadCreated: false,
+              threadSkipped: true,
+              skipReason: "persistenceFailed",
+              threadId: thread.id,
+              errorName: getSafeErrorName(error),
+              persistedThreadCount: getThreadRecordCount(workflowStateRef.current),
+              visibleThreadCount: visibleThreads.length,
+            });
+          }
+        }
+
+        if (cancelled) {
+          return;
+        }
+
+        if (savedEntries.length > 0) {
+          applyWorkflowState({
+            ...workflowStateRef.current,
+            threadStates: {
+              ...workflowStateRef.current.threadStates,
+              ...Object.fromEntries(
+                savedEntries
+                  .filter(
+                    (entry) =>
+                      !workflowStateRef.current.threadStates[entry.threadId]
+                        ?.manualAssignment,
+                  )
+                  .map((entry) => [entry.threadId, entry.threadState]),
+              ),
+            },
+          });
+        }
+
+        console.info("[Action Desk diagnostics] workflow thread persistence", {
+          totalEmailsProcessed: queueItems.length,
+          analyzedCount,
+          threadCreated: savedEntries.length,
+          threadSkipped: Array.from(skipCounts.values()).reduce(
+            (total, count) => total + count,
+            0,
+          ),
+          skipReason: Object.fromEntries(skipCounts.entries()),
+          threadsPersisted:
+            getThreadRecordCount(workflowStateRef.current) + savedEntries.length,
+          threadsVisible: visibleThreads.length,
+          persistedThreadCount:
+            getThreadRecordCount(workflowStateRef.current) + savedEntries.length,
+          visibleThreadCount: visibleThreads.length,
+        });
+      }
+
+      void persistMissingWorkflowThreadRecords();
+
+      return () => {
+        cancelled = true;
+      };
+    }, [currentRep, workflowThreadPersistenceKey]);
+
+    useEffect(() => {
+      if (totalLoadedEmails === 0) {
+        return;
+      }
+
+      console.info("[Action Desk diagnostics] workflow queue visibility", {
+        totalEmailsProcessed: totalLoadedEmails,
+        analyzedCount,
+        threadsCreated: workflowThreads.length,
+        threadsPersisted: persistedThreadCount,
+        threadsVisible: visibleThreads.length,
+        persistedThreadCount,
+        visibleThreadCount: visibleThreads.length,
+        scopedThreadCount: scopedWorkflowThreads.length,
+        roleScopedThreadCount: roleScopedWorkflowThreads.length,
+        queueView,
+        queueScopeView: safeQueueScopeView,
+        assignmentScopeBypassed: bypassAssignmentScope,
+        statusFilter: workflowState.preferences.statusFilter,
+        showSnoozed: workflowState.preferences.showSnoozed,
+        supervisorQuickFilter,
+        currentRepId: currentRep?.id,
+        currentRepRole: currentRep?.role,
+        currentRepLocationId: currentRep?.locationId,
+      });
+    }, [workflowVisibilityDiagnosticsKey]);
+
+    useEffect(() => {
+      if (!currentRep || assignmentSyncThreads.length === 0) {
+        return;
+      }
+
+      const syncResult = syncAutoAssignmentsToWorkflowState(
+        workflowStateRef.current,
+        assignmentSyncThreads,
+      );
+
+      if (syncResult.updates.length === 0) {
+        return;
+      }
+
+      applyWorkflowState(syncResult.workflowState);
+
+      void (async () => {
+        try {
+          const savedUpdates = await Promise.all(
+            syncResult.updates.map(async (update) => {
+              if (
+                workflowStateRef.current.threadStates[update.threadId]
+                  ?.manualAssignment
+              ) {
+                return null;
+              }
+
+              const threadState = await saveSharedThreadState(
+                update.threadId,
+                update.threadState,
+              );
+
+              return {
+                threadId: update.threadId,
+                threadState,
+              };
+            }),
+          );
+          const savedEntries = savedUpdates.filter(
+            (
+              update,
+            ): update is {
+              threadId: string;
+              threadState: WorkflowState["threadStates"][string];
+            } => update !== null,
+          );
+
+          if (savedEntries.length === 0) {
+            return;
+          }
+
+          applyWorkflowState({
+            ...workflowStateRef.current,
+            threadStates: {
+              ...workflowStateRef.current.threadStates,
+              ...Object.fromEntries(
+                savedEntries
+                  .filter(
+                    (entry) =>
+                      !workflowStateRef.current.threadStates[entry.threadId]
+                        ?.manualAssignment,
+                  )
+                  .map((entry) => [entry.threadId, entry.threadState]),
+              ),
+            },
+          });
+        } catch (error) {
+          console.warn("Action Desk auto assignment sync failed", {
+            errorName: getSafeErrorName(error),
+            attemptedThreadCount: syncResult.updates.length,
+          });
+          markSyncFailure(
+            error,
+            "Assignment routing could not be saved right now.",
+          );
+        }
+      })();
+    }, [currentRep, autoAssignmentSyncKey]);
+
+    useEffect(() => {
+      if (!import.meta.env.DEV || !showDebugUi || assignmentSyncThreads.length === 0) {
+        return;
+      }
+
+      console.info(
+        "Action Desk assignment resolution",
+        assignmentSyncThreads.map((thread) => ({
+          threadId: thread.id,
+          senderEmail: thread.representativeItem.email.senderEmail,
+          matchedCustomer:
+            thread.assignmentResolution.customerName ??
+            thread.representativeItem.customerMatch?.customerName ??
+            null,
+          matchType: thread.assignmentResolution.matchType,
+          assignmentSource: thread.assignmentResolution.assignmentSource,
+          assignmentStatus: thread.assignmentResolution.assignmentStatus,
+          resolvedRepIds: thread.assignmentResolution.assignedRepIds,
+        })),
+      );
+    }, [autoAssignmentSyncKey, showDebugUi]);
 
     useEffect(() => {
       if (!currentRep || !selectedThread || !detailPaneVisible) {
@@ -2479,6 +3759,34 @@ export default function App() {
       boxShadow: "0 10px 30px rgba(15, 23, 42, 0.06)",
     };
 
+    const refreshBannerStyle: React.CSSProperties = {
+      display: "flex",
+      justifyContent: "space-between",
+      alignItems: "center",
+      gap: "12px",
+      flexWrap: "wrap",
+      backgroundColor: "#eff6ff",
+      border: "1px solid #bfdbfe",
+      borderRadius: "12px",
+      color: "#1e3a8a",
+      padding: "12px 14px",
+      marginBottom: "20px",
+      boxShadow: "0 8px 20px rgba(37, 99, 235, 0.08)",
+    };
+
+    const refreshTitleStyle: React.CSSProperties = {
+      margin: 0,
+      fontSize: "14px",
+      fontWeight: 800,
+      color: "#1d4ed8",
+    };
+
+    const refreshDetailStyle: React.CSSProperties = {
+      margin: 0,
+      fontSize: "13px",
+      color: "#1e40af",
+    };
+
     if (authLoading) {
       return (
         <AuthPanel
@@ -2587,7 +3895,7 @@ export default function App() {
             currentUser={currentRep}
             reps={workflowState.reps}
             capabilities={authSession.capabilities}
-            customers={visibleSettingsCustomers}
+            customers={savedCustomers}
             slaSettings={slaSettings}
             adminUsers={canManageUsers ? adminUsers : undefined}
             onCreateUserAccess={canManageUsers ? handleCreateUserAccess : undefined}
@@ -2711,7 +4019,7 @@ export default function App() {
             currentUser={currentRep}
             reps={workflowState.reps}
             capabilities={authSession.capabilities}
-            customers={visibleSettingsCustomers}
+            customers={savedCustomers}
             slaSettings={slaSettings}
             adminUsers={canManageUsers ? adminUsers : undefined}
             onCreateUserAccess={canManageUsers ? handleCreateUserAccess : undefined}
@@ -2762,7 +4070,7 @@ export default function App() {
             currentUser={currentRep}
             reps={workflowState.reps}
             capabilities={authSession.capabilities}
-            customers={visibleSettingsCustomers}
+            customers={savedCustomers}
             slaSettings={slaSettings}
             adminUsers={canManageUsers ? adminUsers : undefined}
             onCreateUserAccess={canManageUsers ? handleCreateUserAccess : undefined}
@@ -2895,6 +4203,18 @@ export default function App() {
 
           <SyncStatusBanner status={syncStatus} message={syncMessage} />
 
+          {isRefreshingInbox && (
+            <div role="status" aria-live="polite" style={refreshBannerStyle}>
+              <p style={refreshTitleStyle}>Refreshing inbox...</p>
+              <p style={refreshDetailStyle}>
+                {processingStatus &&
+                processingStatus !== "Refreshing inbox emails."
+                  ? processingStatus
+                  : "Checking for new messages."}
+              </p>
+            </div>
+          )}
+
           {showDebugUi && currentRep.role === "admin" && desktopRuntimeInfo && (
             <div style={{ ...statusCardStyle, marginBottom: "20px" }}>
               Desktop mode active. App data folder: {desktopRuntimeInfo.userDataPath}.
@@ -2906,7 +4226,7 @@ export default function App() {
             </div>
           )}
 
-          {processingStatus && (
+          {processingStatus && !isRefreshingInbox && (
             <div style={{ ...statusCardStyle, marginBottom: "20px" }}>
               {processingStatus}
             </div>
@@ -3062,6 +4382,7 @@ export default function App() {
                 onSnoozeThread={handleSnoozeThread}
                 onUnsnoozeThread={handleUnsnoozeThread}
                 onTakeThread={handleTakeThread}
+                onAssignThread={handleAssignThread}
                 onApplyMacro={handleApplyMacro}
                 onRecomputePriority={async () => {
                   if (!selectedItem) {
@@ -3242,7 +4563,7 @@ export default function App() {
           currentUser={currentRep}
           reps={workflowState.reps}
           capabilities={authSession.capabilities}
-          customers={visibleSettingsCustomers}
+          customers={savedCustomers}
           slaSettings={slaSettings}
           adminUsers={canManageUsers ? adminUsers : undefined}
           onCreateUserAccess={canManageUsers ? handleCreateUserAccess : undefined}

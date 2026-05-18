@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { getEffectiveAssignment } from "./assignmentLogic";
+import {
+  getEffectiveAssignment,
+  resolveCanonicalAssignment,
+} from "./assignmentLogic";
 import type {
   ProcessedEmail,
   RepProfile,
@@ -48,7 +51,7 @@ describe("getEffectiveAssignment", () => {
       customerMatch: {
         customerId: "customer-1",
         customerName: "Acme",
-        matchedOn: "sender_email",
+        matchedOn: "email",
         matchedValue: "orders@acme.com",
         ownerRepId: "rep-1",
       },
@@ -68,6 +71,20 @@ describe("getEffectiveAssignment", () => {
       assignedRepId: "rep-1",
       assignedRepName: "Mia Johnson",
     });
+    expect(
+      resolveCanonicalAssignment({
+        representativeItem: item,
+        customers,
+        reps,
+      }),
+    ).toMatchObject({
+      assignmentStatus: "assigned",
+      assignmentSource: "customer_email",
+      primaryRepId: "rep-1",
+      primaryRepName: "Mia Johnson",
+      assignedRepIds: ["rep-1"],
+      matchType: "email",
+    });
   });
 
   it("lets manual assignment override auto-assignment", () => {
@@ -75,7 +92,7 @@ describe("getEffectiveAssignment", () => {
       customerMatch: {
         customerId: "customer-1",
         customerName: "Acme",
-        matchedOn: "sender_email",
+        matchedOn: "email",
         matchedValue: "orders@acme.com",
         ownerRepId: "rep-1",
       },
@@ -107,6 +124,20 @@ describe("getEffectiveAssignment", () => {
       assignedRepId: "rep-2",
       assignedRepName: "Alex Rivera",
     });
+    expect(
+      resolveCanonicalAssignment({
+        threadState,
+        representativeItem: item,
+        customers,
+        reps,
+      }),
+    ).toMatchObject({
+      assignmentStatus: "assigned",
+      assignmentSource: "manual",
+      primaryRepId: "rep-2",
+      primaryRepName: "Alex Rivera",
+      assignedRepIds: ["rep-2"],
+    });
   });
 
   it("auto-assigns a domain-matched customer to its owner rep", () => {
@@ -114,7 +145,7 @@ describe("getEffectiveAssignment", () => {
       customerMatch: {
         customerId: "customer-1",
         customerName: "Acme",
-        matchedOn: "sender_domain",
+        matchedOn: "domain",
         matchedValue: "acme.com",
         ownerRepId: "rep-1",
       },
@@ -133,6 +164,51 @@ describe("getEffectiveAssignment", () => {
       type: "auto",
       assignedRepId: "rep-1",
       assignedRepName: "Mia Johnson",
+    });
+    expect(
+      resolveCanonicalAssignment({
+        representativeItem: item,
+        customers,
+        reps,
+      }),
+    ).toMatchObject({
+      assignmentStatus: "assigned",
+      assignmentSource: "customer_domain",
+      primaryRepId: "rep-1",
+      matchType: "domain",
+    });
+  });
+
+  it("uses persisted auto assignment when customer settings are not loaded", () => {
+    const item = buildProcessedEmail();
+    const threadState: ThreadWorkflowState = {
+      autoAssignment: {
+        type: "auto",
+        assignedRepId: "rep-1",
+        assignedRepName: "Mia Johnson",
+        assignedAt: "2026-04-21T12:00:00.000Z",
+      },
+      assignmentHistory: [],
+      notes: [],
+      replyLog: [],
+    };
+
+    expect(getEffectiveAssignment(threadState, item, [], reps)).toMatchObject({
+      type: "auto",
+      assignedRepId: "rep-1",
+      assignedRepName: "Mia Johnson",
+    });
+    expect(
+      resolveCanonicalAssignment({
+        threadState,
+        representativeItem: item,
+        customers: [],
+        reps,
+      }),
+    ).toMatchObject({
+      assignmentStatus: "assigned",
+      assignmentSource: "persisted",
+      primaryRepId: "rep-1",
     });
   });
 });

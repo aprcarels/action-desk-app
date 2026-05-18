@@ -40,6 +40,9 @@ function extractIdentifier(rawEmail: RawInboxEmail, pattern: RegExp): string | n
 export function mapRawInboxEmailToMailboxMessage(rawEmail: RawInboxEmail): MailboxMessage {
   const now = new Date().toISOString();
   const receivedAt = normalizeTimestamp(rawEmail.receivedAt, now);
+  const sentAt = rawEmail.sentAt
+    ? normalizeTimestamp(rawEmail.sentAt, receivedAt)
+    : null;
 
   return {
     id: rawEmail.id,
@@ -59,9 +62,9 @@ export function mapRawInboxEmailToMailboxMessage(rawEmail: RawInboxEmail): Mailb
     bodyPreview: rawEmail.previewText?.trim() || null,
     bodyText: rawEmail.bodyText.trim() || null,
     receivedAt,
-    sentAt: null,
+    sentAt,
     isRead: false,
-    hasAttachments: false,
+    hasAttachments: rawEmail.hasAttachments === true,
     webLink: rawEmail.outlookWebLink?.trim() || null,
     extractedIdentifiers: {
       orderNumber: extractIdentifier(rawEmail, /\bORD-\d+\b/i),

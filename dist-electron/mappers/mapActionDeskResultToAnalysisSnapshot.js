@@ -4,7 +4,10 @@ exports.mapActionDeskResultToAnalysisSnapshot = mapActionDeskResultToAnalysisSna
 const issueType_1 = require("../domain/issueType");
 const mapPriority_1 = require("./mapPriority");
 function mapCurrentAnalysisSource(source) {
-    return source === "ai" ? "ai" : "heuristic";
+    if (source === "ai" || source === "hybrid") {
+        return source;
+    }
+    return "heuristic";
 }
 function buildExtractedSignals(result) {
     const signals = new Set();

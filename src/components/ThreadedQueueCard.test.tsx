@@ -1,7 +1,11 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { ThreadedQueueCard } from "./ThreadedQueueCard";
-import type { ProcessedEmail, WorkflowThread } from "../types/actionDesk";
+import type {
+  AssignmentResolution,
+  ProcessedEmail,
+  WorkflowThread,
+} from "../types/actionDesk";
 
 function buildProcessedEmail(): ProcessedEmail {
   return {
@@ -32,8 +36,14 @@ function buildProcessedEmail(): ProcessedEmail {
   };
 }
 
-function buildThread(): WorkflowThread {
-  const item = buildProcessedEmail();
+function buildThread(item = buildProcessedEmail()): WorkflowThread {
+  const assignmentResolution: AssignmentResolution = {
+    assignmentStatus: "unassigned",
+    assignmentSource: "none",
+    assignedRepIds: [],
+    assignedRepNames: [],
+    matchType: "none",
+  };
 
   return {
     id: "sender:orders@acme.com",
@@ -46,6 +56,7 @@ function buildThread(): WorkflowThread {
     oldestReceivedAt: "2026-04-21T11:15:00.000Z",
     latestActivityAt: "2026-04-21T11:15:00.000Z",
     itemCount: 1,
+    assignmentResolution,
     assignmentHistory: [],
     status: "new",
     notes: [],
@@ -100,6 +111,8 @@ describe("ThreadedQueueCard SLA display", () => {
     expect(markup).toContain("SLA: At Risk");
     expect(markup).toContain("Waiting 45m");
     expect(markup).toContain("First Reply SLA: At Risk");
+    expect(markup).toContain("Rules-Based");
+    expect(markup).toContain("Why prioritized: First reply SLA at risk.");
   });
 
   it("renders primary customer owner with an additional CSR count", () => {
@@ -114,6 +127,17 @@ describe("ThreadedQueueCard SLA display", () => {
           customerAssignedRepIds: ["rep-1", "rep-2"],
           customerAssignedRepNames: ["Mia Johnson", "Alex Rivera"],
           customerAssignedRepInitials: ["MJ", "AR"],
+          assignmentResolution: {
+            assignmentStatus: "assigned",
+            assignmentSource: "customer_email",
+            primaryRepId: "rep-1",
+            primaryRepName: "Mia Johnson",
+            assignedRepIds: ["rep-1", "rep-2"],
+            assignedRepNames: ["Mia Johnson", "Alex Rivera"],
+            customerId: "customer-1",
+            customerName: "Acme Logistics",
+            matchType: "email",
+          },
         }}
         now={new Date("2026-04-21T12:00:00.000Z")}
         isSelected={false}
@@ -124,8 +148,40 @@ describe("ThreadedQueueCard SLA display", () => {
     );
 
     expect(markup).toContain("Assigned to");
-    expect(markup).toContain("MJ +1");
+    expect(markup).toContain("Mia Johnson +1");
     expect(markup).toContain("Assigned CSRs: Mia Johnson, Alex Rivera");
     expect(markup).not.toContain("Unassigned");
+  });
+
+  it("renders missing-body system reports without failed or retry treatment", () => {
+    const item: ProcessedEmail = {
+      ...buildProcessedEmail(),
+      email: {
+        ...buildProcessedEmail().email,
+        senderName: "AP Express Systems",
+        senderEmail: "systems@apexpress.com",
+        subject: "OutboundYesterdayTracking_Summary",
+        body: "",
+        previewText: "",
+      },
+      status: "failed",
+      result: undefined,
+      processingError: "This email could not be analyzed because the body is missing.",
+      previewText: "",
+    };
+    const markup = renderToStaticMarkup(
+      <ThreadedQueueCard
+        thread={buildThread(item)}
+        now={new Date("2026-04-21T12:00:00.000Z")}
+        isSelected={false}
+        onSelect={vi.fn()}
+        onTakeThread={vi.fn()}
+        onRetryEmail={vi.fn()}
+      />,
+    );
+
+    expect(markup).toContain("System report");
+    expect(markup).not.toContain("Failed");
+    expect(markup).not.toContain("Retry");
   });
 });

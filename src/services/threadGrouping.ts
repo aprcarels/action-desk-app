@@ -19,6 +19,10 @@ export function getThreadGroupKey(item: ProcessedEmail): string {
     return `customer:${item.customerMatch.customerId}`;
   }
 
+  if (item.email.conversationId) {
+    return item.email.conversationId;
+  }
+
   return getSenderThreadGroupKey(item.email.senderEmail);
 }
 

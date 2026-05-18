@@ -1,0 +1,37 @@
+{
+  "locations": [
+    {
+      "id": "apexpress_irwindale",
+      "name": "Apexpress Irwindale",
+      "domain": "apexpress.com",
+      "aliases": [
+        "apexpress-1",
+        "Apexpress 1",
+        "AP Express Irwindale",
+        "Irwindale"
+      ]
+    },
+    {
+      "id": "apexpress_corona",
+      "name": "Apexpress Corona",
+      "domain": "apexpress.com",
+      "aliases": [
+        "apexpress-2",
+        "Apexpress 2",
+        "AP Express Corona",
+        "Corona"
+      ]
+    },
+    {
+      "id": "worldpackusa_las_vegas",
+      "name": "worldpackusa Las Vegas",
+      "domain": "worldpackusa.com",
+      "aliases": [
+        "worldpackusa",
+        "World Pack USA Las Vegas",
+        "Worldpack USA Las Vegas",
+        "Worldpackusa"
+      ]
+    }
+  ]
+}

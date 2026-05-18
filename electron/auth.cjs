@@ -24,11 +24,15 @@ const AUTH_TIMEOUT_MS = 120000;
 let msalApp = null;
 let cryptoProvider = null;
 const sessionContexts = new Map();
+const sessionAliases = new Map();
 let lastActiveSessionId = null;
 
-function createAuthError(message, code) {
+function createAuthError(message, code, details) {
   const error = new Error(message);
   error.code = code;
+  if (details !== undefined) {
+    error.details = details;
+  }
   return error;
 }
 
@@ -37,11 +41,64 @@ function createSessionId() {
 }
 
 function rememberActiveSession(sessionId) {
-  const normalizedSessionId = String(sessionId || "");
+  const normalizedSessionId = normalizeSessionId(sessionId);
 
-  if (normalizedSessionId && sessionContexts.has(normalizedSessionId)) {
+  if (normalizedSessionId && hasSessionContext(normalizedSessionId)) {
     lastActiveSessionId = normalizedSessionId;
   }
+}
+
+function normalizeSessionId(sessionId) {
+  return String(sessionId || "").trim();
+}
+
+function resolveSessionId(sessionId) {
+  const normalizedSessionId = normalizeSessionId(sessionId);
+  const seenSessionIds = new Set();
+  let currentSessionId = normalizedSessionId;
+
+  while (currentSessionId && sessionAliases.has(currentSessionId)) {
+    if (seenSessionIds.has(currentSessionId)) {
+      return normalizedSessionId;
+    }
+
+    seenSessionIds.add(currentSessionId);
+    currentSessionId = sessionAliases.get(currentSessionId);
+  }
+
+  return currentSessionId || normalizedSessionId;
+}
+
+function getSessionContextForLookup(sessionId) {
+  const requestedSessionId = normalizeSessionId(sessionId);
+  const microsoftAuthSessionId = resolveSessionId(requestedSessionId);
+  const context =
+    sessionContexts.get(microsoftAuthSessionId) ??
+    sessionContexts.get(requestedSessionId);
+
+  return {
+    context,
+    microsoftAuthSessionId,
+    requestedSessionId,
+  };
+}
+
+function getSessionLookupState(sessionId) {
+  const {
+    context,
+    microsoftAuthSessionId,
+    requestedSessionId,
+  } = getSessionContextForLookup(sessionId);
+  const aliasUsed = requestedSessionId !== microsoftAuthSessionId;
+
+  return {
+    tokenLookupSessionId: requestedSessionId,
+    backendSessionId: aliasUsed ? requestedSessionId : undefined,
+    resolvedMicrosoftSessionId: microsoftAuthSessionId,
+    microsoftAuthSessionId,
+    tokenContextExists: Boolean(context),
+    aliasUsed,
+  };
 }
 
 function getRequiredEnv(name) {
@@ -92,20 +149,32 @@ function getCryptoProvider() {
 
 function buildIdentityFromResult(result) {
   const claims = result.idTokenClaims ?? {};
+  const account = result.account ?? {};
+  const homeAccountId = String(account.homeAccountId || "").trim();
+  const localAccountId = String(account.localAccountId || "").trim();
+  const accountUsername = String(account.username || "").trim().toLowerCase();
   const entraObjectId = String(
-    claims.oid || claims.sub || result.account?.homeAccountId || "",
+    claims.oid || localAccountId || claims.sub || homeAccountId || "",
   ).trim();
   const email = String(
-    claims.preferred_username || claims.email || result.account?.username || "",
+    claims.preferred_username || claims.email || accountUsername || "",
   )
     .trim()
     .toLowerCase();
-  const displayName = String(claims.name || result.account?.name || email).trim();
+  const displayName = String(claims.name || account.name || email).trim();
+  const microsoftUserId = String(
+    claims.oid || localAccountId || homeAccountId || claims.sub || "",
+  ).trim();
 
   return {
+    accountUsername,
     entraObjectId,
     email,
     displayName,
+    homeAccountId,
+    localAccountId,
+    microsoft_user_id: microsoftUserId,
+    microsoftUserId,
   };
 }
 
@@ -220,17 +289,39 @@ async function refreshInteractiveAccessToken(context, logger) {
 }
 
 async function getAccessTokenForSession(sessionId, options = {}, logger) {
-  const context = sessionContexts.get(String(sessionId || ""));
+  const {
+    context,
+    microsoftAuthSessionId,
+    requestedSessionId,
+  } = getSessionContextForLookup(sessionId);
+  const lookupState = getSessionLookupState(sessionId);
+  const routePath =
+    options.routePath || options.route || options.path || options.context || undefined;
+
+  logger?.info?.("auth", "Microsoft token lookup.", {
+    routePath,
+    tokenLookupSessionId: requestedSessionId,
+    backendSessionId: lookupState.backendSessionId,
+    resolvedMicrosoftSessionId: microsoftAuthSessionId,
+    microsoftAuthSessionId,
+    tokenContextExists: lookupState.tokenContextExists,
+    aliasUsed: lookupState.aliasUsed,
+  });
 
   if (!context) {
+    logger?.warn?.("auth", "Microsoft token context missing for session.", {
+      routePath,
+      ...lookupState,
+    });
     throw createAuthError(
-      "Your Microsoft session expired. Please sign in again.",
-      "microsoft_session_missing",
+      "Microsoft token context missing for session",
+      "microsoft_token_context_missing",
+      lookupState,
     );
   }
 
   if (context.accessToken && context.expiresAt > Date.now() + 60_000) {
-    rememberActiveSession(sessionId);
+    rememberActiveSession(requestedSessionId);
     return context.accessToken;
   }
 
@@ -252,28 +343,37 @@ async function getAccessTokenForSession(sessionId, options = {}, logger) {
       : Date.now() + 3600 * 1000;
     context.identity = buildIdentityFromResult(result);
 
-    rememberActiveSession(sessionId);
+    rememberActiveSession(requestedSessionId);
     return context.accessToken;
   } catch (error) {
     if (!(error instanceof InteractionRequiredAuthError) || options.interactive !== true) {
+      logger?.warn?.("auth", "Microsoft token refresh failed.", {
+        routePath,
+        ...lookupState,
+        errorCode: error?.code,
+        error: error instanceof Error ? error.message : String(error),
+      });
       throw createAuthError(
         "Your Microsoft session expired. Please sign in again.",
         "microsoft_session_expired",
+        lookupState,
       );
     }
 
     logger?.info?.("auth", "Silent token refresh requires interactive re-auth.", {
-      sessionId: String(sessionId || ""),
+      routePath,
+      tokenLookupSessionId: requestedSessionId,
+      resolvedMicrosoftSessionId: microsoftAuthSessionId,
     });
 
     const accessToken = await refreshInteractiveAccessToken(context, logger);
-    rememberActiveSession(sessionId);
+    rememberActiveSession(requestedSessionId);
     return accessToken;
   }
 }
 
 function getAvailableSessionId() {
-  if (lastActiveSessionId && sessionContexts.has(lastActiveSessionId)) {
+  if (lastActiveSessionId && hasSessionContext(lastActiveSessionId)) {
     return lastActiveSessionId;
   }
 
@@ -287,8 +387,9 @@ async function getAccessTokenForAvailableSession(options = {}, logger) {
 
   if (!sessionId) {
     throw createAuthError(
-      "Your Microsoft session expired. Please sign in again.",
-      "microsoft_session_missing",
+      "Microsoft token context missing for session",
+      "microsoft_token_context_missing",
+      getSessionLookupState(sessionId),
     );
   }
 
@@ -296,26 +397,78 @@ async function getAccessTokenForAvailableSession(options = {}, logger) {
 }
 
 function getSessionIdentity(sessionId) {
-  return sessionContexts.get(String(sessionId || ""))?.identity ?? null;
+  return getSessionContextForLookup(sessionId).context?.identity ?? null;
+}
+
+function aliasSessionContext(sourceSessionId, targetSessionId) {
+  const normalizedSourceSessionId = normalizeSessionId(sourceSessionId);
+  const normalizedTargetSessionId = normalizeSessionId(targetSessionId);
+
+  if (!normalizedSourceSessionId || !normalizedTargetSessionId) {
+    return false;
+  }
+
+  const microsoftAuthSessionId = resolveSessionId(normalizedSourceSessionId);
+  const context =
+    sessionContexts.get(microsoftAuthSessionId) ??
+    sessionContexts.get(normalizedSourceSessionId);
+
+  if (!context) {
+    return false;
+  }
+
+  if (normalizedSourceSessionId === normalizedTargetSessionId) {
+    sessionAliases.delete(normalizedTargetSessionId);
+    sessionContexts.set(normalizedTargetSessionId, context);
+    rememberActiveSession(normalizedTargetSessionId);
+    return true;
+  }
+
+  sessionAliases.set(normalizedTargetSessionId, microsoftAuthSessionId);
+  sessionContexts.set(normalizedTargetSessionId, context);
+  rememberActiveSession(normalizedTargetSessionId);
+  return true;
 }
 
 function hasSessionContext(sessionId) {
-  return sessionContexts.has(String(sessionId || ""));
+  return Boolean(getSessionContextForLookup(sessionId).context);
 }
 
 function signOutSession(sessionId) {
-  const normalizedSessionId = String(sessionId || "");
-  sessionContexts.delete(normalizedSessionId);
+  const normalizedSessionId = normalizeSessionId(sessionId);
+  const microsoftAuthSessionId = resolveSessionId(normalizedSessionId);
+  const removedSessionIds = new Set(
+    [normalizedSessionId, microsoftAuthSessionId].filter(Boolean),
+  );
 
-  if (lastActiveSessionId === normalizedSessionId) {
+  for (const [aliasSessionId, sourceSessionId] of sessionAliases.entries()) {
+    if (
+      aliasSessionId === normalizedSessionId ||
+      aliasSessionId === microsoftAuthSessionId ||
+      sourceSessionId === normalizedSessionId ||
+      sourceSessionId === microsoftAuthSessionId
+    ) {
+      removedSessionIds.add(aliasSessionId);
+      removedSessionIds.add(sourceSessionId);
+      sessionAliases.delete(aliasSessionId);
+    }
+  }
+
+  for (const removedSessionId of removedSessionIds) {
+    sessionContexts.delete(removedSessionId);
+  }
+
+  if (removedSessionIds.has(lastActiveSessionId)) {
     lastActiveSessionId = null;
   }
 }
 
 module.exports = {
+  aliasSessionContext,
   getAccessTokenForAvailableSession,
   getAccessTokenForSession,
   getSessionIdentity,
+  getSessionLookupState,
   hasSessionContext,
   signInWithMicrosoft,
   signOutSession,

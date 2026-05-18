@@ -105,6 +105,27 @@ const SYSTEM_PATTERNS = [
   "security code",
 ];
 
+const SYSTEM_REPORT_PATTERNS = [
+  "tracking_summary",
+  "tracking summary",
+  "daily report",
+  "daily summary",
+  "summary report",
+  "scheduled report",
+  "automated report",
+  "generated report",
+  "system report",
+];
+
+const DEFINITE_SYSTEM_REPORT_PATTERNS = [
+  "outboundyesterdaytracking_summary",
+  "outbound yesterday tracking summary",
+  "automated report",
+  "generated report",
+  "system report",
+  "scheduled report",
+];
+
 const INTERNAL_PATTERNS = [
   "fyi",
   "for awareness",
@@ -175,11 +196,40 @@ const SYSTEM_SENDER_PATTERNS = [
   "calendar-notification@",
 ];
 
+const SYSTEM_REPORT_SENDER_PATTERNS = [
+  "systems@",
+  "reports@",
+  "reporting@",
+  "scheduledreports@",
+];
+
 function normalizeEmailText(email: EmailItem): string {
   return [email.subject, email.previewText, email.body]
     .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
     .join("\n")
     .toLowerCase();
+}
+
+export function isLowValueSystemReportEmail(email: Pick<
+  EmailItem,
+  "senderEmail" | "subject" | "previewText" | "body"
+>): boolean {
+  const sender = (email.senderEmail || "").toLowerCase();
+  const normalizedText = normalizeEmailText(email as EmailItem);
+  const senderLooksLikeReport = SYSTEM_REPORT_SENDER_PATTERNS.some((pattern) =>
+    sender.includes(pattern),
+  );
+  const textLooksLikeReport = includesAny(normalizedText, SYSTEM_REPORT_PATTERNS);
+  const textIsDefiniteSystemReport = includesAny(
+    normalizedText,
+    DEFINITE_SYSTEM_REPORT_PATTERNS,
+  );
+
+  return (
+    sender === "systems@apexpress.com" ||
+    textIsDefiniteSystemReport ||
+    (senderLooksLikeReport && textLooksLikeReport)
+  );
 }
 
 function getLatestNormalizedMessage(email: EmailItem): string {
@@ -289,6 +339,7 @@ export function classifyWorkType(
   const internalOperations = isInternalOperationsThread(normalizedLatestMessage);
 
   const system =
+    isLowValueSystemReportEmail(email) ||
     includesAny(normalizedLatestMessage, SYSTEM_PATTERNS) ||
     SYSTEM_SENDER_PATTERNS.some((pattern) => sender.includes(pattern));
 

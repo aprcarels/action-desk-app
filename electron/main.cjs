@@ -1,8 +1,61 @@
-const path = require("path");
-require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
+const path = require("node:path");
+const fs = require("node:fs");
+const dotenv = require("dotenv");
+
+function addEnvCandidate(candidatePaths, envPath) {
+  if (!envPath) {
+    return;
+  }
+
+  const resolvedPath = path.resolve(envPath);
+
+  if (!candidatePaths.includes(resolvedPath)) {
+    candidatePaths.push(resolvedPath);
+  }
+}
+
+function loadActionDeskEnv() {
+  const candidatePaths = [];
+
+  addEnvCandidate(candidatePaths, process.env.ACTION_DESK_ENV_PATH);
+  addEnvCandidate(candidatePaths, path.resolve(__dirname, "..", ".env"));
+  addEnvCandidate(candidatePaths, path.resolve(process.cwd(), ".env"));
+  addEnvCandidate(candidatePaths, path.resolve(process.cwd(), "..", ".env"));
+  addEnvCandidate(candidatePaths, path.resolve(process.cwd(), "..", "..", ".env"));
+
+  if (process.resourcesPath) {
+    addEnvCandidate(candidatePaths, path.join(process.resourcesPath, ".env"));
+    addEnvCandidate(candidatePaths, path.join(process.resourcesPath, "app.asar", ".env"));
+  }
+
+  addEnvCandidate(candidatePaths, path.join(path.dirname(process.execPath), ".env"));
+  addEnvCandidate(candidatePaths, path.resolve(__dirname, "..", "..", "..", "..", "..", ".env"));
+
+  for (const envPath of candidatePaths) {
+    if (fs.existsSync(envPath)) {
+      const result = dotenv.config({ path: envPath, override: true });
+      const loaded = !result.error;
+
+      console.log("[Action Desk] Loaded .env from:", envPath);
+      return {
+        envPath,
+        loaded,
+      };
+    }
+  }
+
+  console.warn("[Action Desk] No .env file found; using process environment only.");
+  return {
+    envPath: null,
+    loaded: false,
+  };
+}
+
+const envLoadResult = loadActionDeskEnv();
 
 const { app, BrowserWindow, dialog, ipcMain } = require("electron");
-const { startDesktopAppServer } = require("./appServer.cjs");
+
+let startDesktopAppServer = null;
 
 const {
   createRepositoryBundle,
@@ -21,12 +74,19 @@ const {
 } = require("../dist-electron/mappers/mapRawInboxEmailToMailboxMessage");
 
 const {
+  aliasSessionContext,
   getAccessTokenForAvailableSession,
   getAccessTokenForSession,
+  getSessionLookupState,
   hasSessionContext,
   signInWithMicrosoft,
   signOutSession,
 } = require("./auth.cjs");
+
+const {
+  createBackendApiClient,
+  getActionDeskApiUrl,
+} = require("./backendApiClient.cjs");
 
 const isDev = !app.isPackaged;
 const DESKTOP_DEV_ORIGIN = "https://localhost:5173";
@@ -37,6 +97,7 @@ let desktopAppOrigin = isDev ? DESKTOP_DEV_ORIGIN : null;
 let desktopApiOrigin = null;
 let desktopLogFilePath = null;
 let mainWindowRef = null;
+let backendApiClient = null;
 
 function getQueueManager() {
   if (!queueManager) {
@@ -54,7 +115,8 @@ function getDesktopRuntimeInfo() {
     isElectron: true,
     isDev,
     userDataPath,
-    recommendedRepositoryBackend: "sqlite",
+    recommendedRepositoryBackend: "api",
+    actionDeskApiUrl: backendApiClient?.baseUrl ?? null,
     inboxSource: process.env.VITE_INBOX_SOURCE || "dev",
     appOrigin: desktopAppOrigin,
     apiOrigin: desktopApiOrigin,
@@ -63,37 +125,112 @@ function getDesktopRuntimeInfo() {
 }
 
 function normalizeRawEmailArray(input) {
-  if (Array.isArray(input)) {
-    return input;
-  }
+  if (Array.isArray(input)) return input;
 
   if (input && typeof input === "object") {
-    if (Array.isArray(input.items)) {
-      return input.items;
-    }
-
-    if (Array.isArray(input.emails)) {
-      return input.emails;
-    }
-
-    if (Array.isArray(input.value)) {
-      return input.value;
-    }
-
-    if (Array.isArray(input.messages)) {
-      return input.messages;
-    }
-
-    if (Array.isArray(input.results)) {
-      return input.results;
-    }
-
-    if (Array.isArray(input.data)) {
-      return input.data;
-    }
+    if (Array.isArray(input.items)) return input.items;
+    if (Array.isArray(input.emails)) return input.emails;
+    if (Array.isArray(input.value)) return input.value;
+    if (Array.isArray(input.messages)) return input.messages;
+    if (Array.isArray(input.results)) return input.results;
+    if (Array.isArray(input.data)) return input.data;
   }
 
   return [];
+}
+
+function getBackendSignInErrorMessage(error) {
+  const code = String(error?.code || "").toLowerCase();
+  const message = error instanceof Error ? error.message : String(error || "");
+  const normalizedMessage = message.toLowerCase();
+
+  if (
+    code.includes("inactive") ||
+    normalizedMessage.includes("inactive")
+  ) {
+    return "Your Action Desk account is inactive.";
+  }
+
+  if (
+    code.includes("not_found") ||
+    code.includes("missing") ||
+    code.includes("not_setup") ||
+    normalizedMessage.includes("not set up") ||
+    normalizedMessage.includes("not authorized") ||
+    normalizedMessage.includes("not found")
+  ) {
+    return "Your Microsoft account is not set up in Action Desk.";
+  }
+
+  return message || "Sign-in failed. Please try again.";
+}
+
+function syncLocalSessionFromBackendSession(session) {
+  if (!session?.sessionId || !session.currentUser) {
+    return;
+  }
+
+  const startLocalSession =
+    desktopAppServer?.store?.startRuntimeSession ??
+    desktopAppServer?.store?.startSessionForRepProfile;
+
+  startLocalSession?.call(
+    desktopAppServer.store,
+    session.sessionId,
+    session.currentUser,
+  );
+}
+
+function normalizeIdentityText(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function normalizeIdentityEmail(value) {
+  return normalizeIdentityText(value).toLowerCase();
+}
+
+function removeEmptyIdentityFields(identity) {
+  return Object.fromEntries(
+    Object.entries(identity).filter(([, value]) => normalizeIdentityText(value)),
+  );
+}
+
+function buildBackendMicrosoftIdentity(identity = {}) {
+  const email =
+    normalizeIdentityEmail(identity.email) ||
+    normalizeIdentityEmail(identity.accountUsername);
+  const accountUsername =
+    normalizeIdentityEmail(identity.accountUsername) ||
+    normalizeIdentityEmail(identity.email);
+  const homeAccountId = normalizeIdentityText(identity.homeAccountId);
+  const localAccountId = normalizeIdentityText(identity.localAccountId);
+  const microsoftUserId =
+    normalizeIdentityText(identity.microsoftUserId) ||
+    normalizeIdentityText(identity.microsoft_user_id) ||
+    normalizeIdentityText(identity.entraObjectId) ||
+    localAccountId ||
+    homeAccountId;
+  const displayName = normalizeIdentityText(identity.displayName);
+
+  return removeEmptyIdentityFields({
+    accountUsername,
+    displayName,
+    email,
+    entraObjectId: normalizeIdentityText(identity.entraObjectId) || microsoftUserId,
+    homeAccountId,
+    localAccountId,
+    microsoft_user_id: microsoftUserId,
+    microsoftUserId,
+  });
+}
+
+function getBackendIdentityLogMetadata(identity) {
+  return {
+    email: identity.email || identity.accountUsername || undefined,
+    hasHomeAccountId: Boolean(identity.homeAccountId),
+    hasLocalAccountId: Boolean(identity.localAccountId),
+    hasMicrosoftUserId: Boolean(identity.microsoftUserId || identity.microsoft_user_id),
+  };
 }
 
 function createWindow() {
@@ -114,14 +251,9 @@ function createWindow() {
     },
   });
 
-  mainWindow.webContents.on(
-    "console-message",
-    (_event, level, message, line, sourceId) => {
-      console.log(
-        `[Renderer console][${level}] ${message} (${sourceId}:${line})`,
-      );
-    },
-  );
+  mainWindow.webContents.on("console-message", (_event, level, message, line, sourceId) => {
+    console.log(`[Renderer console][${level}] ${message} (${sourceId}:${line})`);
+  });
 
   if (!desktopAppOrigin) {
     throw new Error("Desktop app origin was not initialized before window creation.");
@@ -134,53 +266,45 @@ function createWindow() {
     console.log("[Electron][popup] window.open requested:", url);
     return { action: "allow" };
   });
-
-  mainWindow.webContents.on("did-create-window", (childWindow) => {
-    console.log("[Electron][popup] popup window created");
-
-    childWindow.webContents.on("did-start-navigation", (_event, url) => {
-      console.log("[Electron][popup] did-start-navigation:", url);
-    });
-
-    childWindow.webContents.on("did-navigate", (_event, url) => {
-      console.log("[Electron][popup] did-navigate:", url);
-    });
-
-    childWindow.webContents.on("did-frame-finish-load", (_event, isMainFrame) => {
-      if (isMainFrame) {
-        console.log("[Electron][popup] did-frame-finish-load:", childWindow.webContents.getURL());
-      }
-    });
-
-    childWindow.webContents.on(
-      "console-message",
-      (_event, level, message, line, sourceId) => {
-        console.log(
-          `[Popup console][${level}] ${message} (${sourceId}:${line})`,
-        );
-      },
-    );
-
-    childWindow.on("closed", () => {
-      console.log("[Electron][popup] popup window closed");
-    });
-  });
 }
 
 app.whenReady().then(async () => {
   try {
+    const resolvedBackendApiUrl = getActionDeskApiUrl();
+
+    console.log("[Action Desk] Resolved backend API URL:", resolvedBackendApiUrl);
+    console.log("[Action Desk] Backend API env source:", envLoadResult.envPath || "process environment");
+
+    backendApiClient = createBackendApiClient({
+      baseUrl: resolvedBackendApiUrl,
+    });
+
+    if (!startDesktopAppServer) {
+      ({ startDesktopAppServer } = require("./appServer.cjs"));
+    }
+
     desktopAppServer = await startDesktopAppServer({
       distDir: path.join(__dirname, "../dist"),
       databasePath: path.join(app.getPath("userData"), "action-desk-shared.sqlite"),
+      backendApi: backendApiClient,
       authProvider: {
+        aliasSessionContext,
         getAccessTokenForAvailableSession,
         getAccessTokenForSession,
+        getSessionLookupState,
         hasSessionContext,
         signOutSession,
       },
     });
+
     desktopApiOrigin = desktopAppServer.origin;
     desktopLogFilePath = desktopAppServer.logger?.getLogFilePath?.() ?? null;
+    backendApiClient.setLogger?.(desktopAppServer.logger);
+    desktopAppServer.logger?.info?.("startup", "Resolved backend API URL.", {
+      actionDeskApiUrl: backendApiClient.baseUrl,
+      envPath: envLoadResult.envPath || undefined,
+      envLoaded: envLoadResult.loaded,
+    });
 
     if (!isDev) {
       desktopAppOrigin = desktopAppServer.origin;
@@ -201,28 +325,78 @@ app.whenReady().then(async () => {
   });
 
   ipcMain.handle("actionDesk:auth:signInWithMicrosoft", async () => {
+    const microsoftSession = await signInWithMicrosoft(desktopAppServer?.logger);
+    const backendIdentity = buildBackendMicrosoftIdentity(microsoftSession.identity);
+    const identityLogMetadata = getBackendIdentityLogMetadata(backendIdentity);
+
+    desktopAppServer?.logger?.info("auth", "Sending Microsoft identity to backend.", {
+      ...identityLogMetadata,
+      microsoftAuthSessionId: microsoftSession.sessionId,
+    });
+
     try {
-      const authResult = await signInWithMicrosoft();
-      const session = desktopAppServer.store.startSessionForIdentity(
-        authResult.sessionId,
-        authResult.identity,
+      const backendSession = await backendApiClient.requestJson(
+        "/api/auth/microsoft-session",
+        {
+          method: "POST",
+          body: {
+            microsoftSessionId: microsoftSession.sessionId,
+            identity: backendIdentity,
+            ...backendIdentity,
+          },
+        },
       );
-      desktopAppServer.logger?.info("auth", "Microsoft sign-in completed.", {
-        sessionId: session.sessionId,
-        repId: session.currentUser?.id,
+
+      if (!backendSession?.sessionId || !backendSession.currentUser) {
+        const error = new Error("Your Microsoft account is not set up in Action Desk.");
+        error.code = "microsoft_account_not_setup";
+        throw error;
+      }
+
+      const aliasCreated = aliasSessionContext(
+        microsoftSession.sessionId,
+        backendSession.sessionId,
+      );
+      syncLocalSessionFromBackendSession(backendSession);
+
+      desktopAppServer?.logger?.info("auth", "Backend session resolved.", {
+        ...getSessionLookupState(backendSession.sessionId),
+        microsoftAuthSessionId: microsoftSession.sessionId,
+        backendSessionId: backendSession.sessionId,
+        aliasCreated,
+        repId: backendSession.currentUser.id,
+        role: backendSession.currentUser.role,
       });
-      return session;
+
+      return backendSession;
     } catch (error) {
-      desktopAppServer.logger?.error("auth", "Microsoft sign-in failed.", {
+      signOutSession(microsoftSession.sessionId);
+      desktopAppServer?.logger?.warn("auth", "Backend session was not resolved.", {
+        ...identityLogMetadata,
+        code: error?.code,
+        statusCode: error?.statusCode,
         error: error instanceof Error ? error.message : String(error),
       });
-      throw error;
+      throw new Error(getBackendSignInErrorMessage(error));
     }
   });
 
   ipcMain.handle("actionDesk:auth:signOut", async (_, sessionId) => {
     signOutSession(sessionId);
-    desktopAppServer.store.logout(sessionId);
+    desktopAppServer.store.logout(sessionId, {
+      reason: "userRequestedSignOut",
+      source: "desktop_ipc_sign_out",
+    });
+    await backendApiClient.requestJson("/api/auth/logout", {
+      method: "POST",
+      sessionId,
+      body: {},
+    }).catch((error) => {
+      desktopAppServer.logger?.warn("auth", "Backend sign-out request failed.", {
+        sessionId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
     desktopAppServer.logger?.info("auth", "Microsoft sign-out completed.", {
       sessionId,
     });
@@ -231,49 +405,26 @@ app.whenReady().then(async () => {
 
   ipcMain.handle("actionDesk:queue:ingestRawEmails", async (_, rawInput) => {
     const rawEmails = normalizeRawEmailArray(rawInput);
-
-    console.log(
-      "[Electron] ingestRawEmails received:",
-      Array.isArray(rawInput) ? "array" : typeof rawInput,
-      "normalized count:",
-      rawEmails.length,
-    );
-
     const mailboxMessages = rawEmails.map(mapRawInboxEmailToMailboxMessage);
-
-    console.log("[Electron] mailboxMessages count:", mailboxMessages.length);
-
     const manager = getQueueManager();
+
     await manager.ingestMessages(mailboxMessages);
 
-    const queueItems = await manager.listActiveQueue();
-
-    console.log("[Electron] queueItems after ingest:", queueItems.length);
-    console.log(
-      "[Electron] first queue item:",
-      queueItems.length > 0 ? JSON.stringify(queueItems[0], null, 2) : "none",
-    );
-
     return {
-      queueItems,
+      queueItems: await manager.listActiveQueue(),
     };
   });
 
   ipcMain.handle("actionDesk:queue:load", async (_, options) => {
     const rawInbox = await loadRawInboxQueue(options);
     const rawEmails = normalizeRawEmailArray(rawInbox);
-
-    console.log("[Electron] queue:load normalized count:", rawEmails.length);
-
     const mailboxMessages = rawEmails.map(mapRawInboxEmailToMailboxMessage);
-
     const manager = getQueueManager();
+
     await manager.ingestMessages(mailboxMessages);
 
-    const queueItems = await manager.listActiveQueue();
-
     return {
-      queueItems,
+      queueItems: await manager.listActiveQueue(),
       nextCursor: rawInbox?.nextCursor ?? null,
     };
   });
@@ -281,48 +432,31 @@ app.whenReady().then(async () => {
   ipcMain.handle("actionDesk:queue:loadMore", async (_, options) => {
     const rawInbox = await loadRawInboxQueue(options);
     const rawEmails = normalizeRawEmailArray(rawInbox);
-
-    console.log(
-      "[Electron] queue:loadMore normalized count:",
-      rawEmails.length,
-    );
-
     const mailboxMessages = rawEmails.map(mapRawInboxEmailToMailboxMessage);
-
     const manager = getQueueManager();
+
     await manager.ingestMessages(mailboxMessages);
 
-    const queueItems = await manager.listActiveQueue();
-
     return {
-      queueItems,
+      queueItems: await manager.listActiveQueue(),
       nextCursor: rawInbox?.nextCursor ?? null,
     };
   });
 
-  ipcMain.handle(
-    "actionDesk:queue:recomputePriority",
-    async (_, queueItemId) => {
-      const manager = getQueueManager();
-      return manager.recomputePriority(queueItemId);
-    },
-  );
+  ipcMain.handle("actionDesk:queue:recomputePriority", async (_, queueItemId) => {
+    const manager = getQueueManager();
+    return manager.recomputePriority(queueItemId);
+  });
 
-  ipcMain.handle(
-    "actionDesk:queue:updateWorkStatus",
-    async (_, payload) => {
-      const manager = getQueueManager();
-      return manager.updateWorkStatus(payload.queueItemId, payload.status);
-    },
-  );
+  ipcMain.handle("actionDesk:queue:updateWorkStatus", async (_, payload) => {
+    const manager = getQueueManager();
+    return manager.updateWorkStatus(payload.queueItemId, payload.status);
+  });
 
-  ipcMain.handle(
-    "actionDesk:queue:markResolved",
-    async (_, queueItemId) => {
-      const manager = getQueueManager();
-      return manager.markResolved(queueItemId);
-    },
-  );
+  ipcMain.handle("actionDesk:queue:markResolved", async (_, queueItemId) => {
+    const manager = getQueueManager();
+    return manager.markResolved(queueItemId);
+  });
 
   createWindow();
 

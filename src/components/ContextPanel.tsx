@@ -2,6 +2,7 @@ import { AssignmentBadge } from "./AssignmentBadge";
 import { CollapsibleSection } from "./CollapsibleSection";
 import { StatusPill } from "./StatusPill";
 import { getRiskLabel, getIntentLabel } from "../services/analysisTaxonomy";
+import { ASSIGNED_REP_MISSING_LABEL } from "../services/assignmentLogic";
 import { getCustomerMatchSourceLabel } from "../services/customerMatching";
 import { TAKE_THREAD_REASON_OPTIONS } from "../services/manualAssignment";
 import {
@@ -11,6 +12,8 @@ import {
   getSlaStateLabel,
   getSlaStateStyle,
 } from "../services/sla";
+import { getPriorityExplanationReasons } from "../services/priorityExplanation";
+import { getAnalysisSourceDisclosure } from "../services/sourceDisclosure";
 import type {
   AssignmentReason,
   PilotQueueItemState,
@@ -59,7 +62,27 @@ function getRepName(reps: RepProfile[], repId?: string): string {
     return "Unassigned";
   }
 
-  return reps.find((rep) => rep.id === repId)?.name ?? repId;
+  return reps.find((rep) => rep.id === repId)?.name ?? ASSIGNED_REP_MISSING_LABEL;
+}
+
+function getAssignedRepSummary(thread: WorkflowThread): string {
+  const resolution = thread.assignmentResolution;
+
+  if (resolution.assignmentStatus === "unassigned") {
+    return "Unassigned";
+  }
+
+  if (
+    resolution.assignmentSource !== "manual" &&
+    resolution.assignedRepNames.length > 1
+  ) {
+    return `${resolution.assignedRepNames[0]} +${resolution.assignedRepNames.length - 1}`;
+  }
+
+  return (
+    resolution.primaryRepName ??
+    (resolution.primaryRepId ? ASSIGNED_REP_MISSING_LABEL : "Unassigned")
+  );
 }
 
 function formatSlaTiming(sla: WorkflowThreadSlaStatus): string {
@@ -114,11 +137,29 @@ export function ContextPanel({
   onSetPilotUsefulness,
 }: ContextPanelProps) {
   const priorityScore = item.result?.priorityScore ?? 0;
-  const customerOwnerNames = (
-    item.customerMatch?.ownerRepIds ??
-    (item.customerMatch?.ownerRepId ? [item.customerMatch.ownerRepId] : [])
-  ).map((repId) => getRepName(reps, repId));
+  const assignmentResolution = thread.assignmentResolution;
+  const customerOwnerNames =
+    assignmentResolution.assignedRepNames.length > 0
+      ? assignmentResolution.assignedRepNames
+      : (
+          item.customerMatch?.ownerRepIds ??
+          (item.customerMatch?.ownerRepId ? [item.customerMatch.ownerRepId] : [])
+        ).map((repId) => getRepName(reps, repId));
+  const assignmentBadgeNames =
+    assignmentResolution.assignmentSource === "manual"
+      ? assignmentResolution.primaryRepName
+        ? [assignmentResolution.primaryRepName]
+        : undefined
+      : assignmentResolution.assignedRepNames.length > 0
+        ? assignmentResolution.assignedRepNames
+        : assignmentResolution.primaryRepName
+          ? [assignmentResolution.primaryRepName]
+          : undefined;
   const currentSlaDisplayState = getPrimarySlaDisplayState(thread.sla.current.state);
+  const priorityExplanationReasons = getPriorityExplanationReasons({ item, thread });
+  const analysisSourceDisclosure = getAnalysisSourceDisclosure(
+    item.result?.analysisSource,
+  );
 
   return (
     <aside
@@ -137,14 +178,18 @@ export function ContextPanel({
           <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
             <StatusPill status={thread.status} />
             <AssignmentBadge
-              assignedRepName={thread.assignedRepName}
+              assignedRepName={
+                assignmentResolution.primaryRepName ??
+                (assignmentResolution.primaryRepId ? ASSIGNED_REP_MISSING_LABEL : undefined)
+              }
               assignedRepInitials={thread.assignedRepInitials}
-              assignmentType={thread.assignmentType}
+              assignedRepNames={assignmentBadgeNames}
+              assignmentType={assignmentResolution.assignmentSource === "manual" ? "manual" : "auto"}
             />
           </div>
           <Field
             label="Assigned Rep"
-            value={thread.assignedRepName ?? "Unassigned"}
+            value={getAssignedRepSummary(thread)}
             emphasized={true}
           />
           <Field
@@ -152,7 +197,7 @@ export function ContextPanel({
             value={
               thread.assignmentType === "manual"
                 ? "Manual override"
-                : thread.assignmentType === "auto"
+                : assignmentResolution.assignmentStatus !== "unassigned"
                   ? "Auto-assigned"
                   : "Not assigned yet"
             }
@@ -203,7 +248,9 @@ export function ContextPanel({
               </div>
             </div>
           )}
-          {currentRep && !canTakeThread && thread.assignedRepId === currentRep.id && (
+          {currentRep &&
+            !canTakeThread &&
+            assignmentResolution.assignedRepIds.includes(currentRep.id) && (
             <Field label="Takeover" value="Already assigned to you" />
           )}
         </div>
@@ -237,11 +284,15 @@ export function ContextPanel({
             emphasized={thread.sla.firstResponse.state === "at_risk" || thread.sla.firstResponse.state === "breached"}
           />
           <Field
-            label="First Reply Logged"
+            label="First Reply"
             value={
               thread.firstReplyAt
-                ? new Date(thread.firstReplyAt).toLocaleString()
-                : "No reply logged yet"
+                ? `${new Date(thread.firstReplyAt).toLocaleString()}${
+                    thread.firstReplySource === "thread"
+                      ? " (detected in thread)"
+                      : ""
+                  }`
+                : "No reply detected yet"
             }
           />
           <Field
@@ -261,7 +312,7 @@ export function ContextPanel({
             label="Current SLA Window"
             value={
               thread.sla.current.target === "first_response"
-                ? "Waiting for first logged reply"
+                ? "Waiting for first reply"
                 : thread.status === "resolved"
                   ? "Measured to resolved time"
                   : "Measured until the issue is resolved"
@@ -353,17 +404,42 @@ export function ContextPanel({
       </CollapsibleSection>
 
       <CollapsibleSection
-        title="AI Signals"
+        title="Triage Signals"
         subtitle="Priority, intent, urgency, and top issues"
         defaultOpen={true}
       >
         <div style={{ display: "grid", gap: "12px" }}>
+          <Field
+            label="Analysis Source"
+            value={
+              <span
+                title={analysisSourceDisclosure.detail}
+                style={sourceDisclosureBadgeStyle}
+              >
+                {analysisSourceDisclosure.label}
+              </span>
+            }
+          />
           <Field label="Intent" value={getIntentLabel(item.result?.analysis.intent ?? "general_support")} emphasized={true} />
           <Field label="Urgency" value={item.result?.analysis.urgency ?? "Unknown"} />
           <Field
             label="Priority Score"
             value={`${priorityScore} (${getPriorityLabel(priorityScore)})`}
           />
+          <div style={priorityExplanationBoxStyle}>
+            <span style={priorityExplanationLabelStyle}>Why prioritized</span>
+            {priorityExplanationReasons.length > 0 ? (
+              <ul style={priorityExplanationListStyle}>
+                {priorityExplanationReasons.map((reason) => (
+                  <li key={reason}>{reason}</li>
+                ))}
+              </ul>
+            ) : (
+              <div style={priorityExplanationEmptyStyle}>
+                No priority drivers available yet.
+              </div>
+            )}
+          </div>
           <Field
             label="Reply Guidance"
             value={item.result?.analysis.replyNeeded ?? "Unknown"}
@@ -480,6 +556,48 @@ const fieldLabelStyle: React.CSSProperties = {
   color: "#64748b",
   textTransform: "uppercase",
   letterSpacing: "0.04em",
+};
+
+const priorityExplanationBoxStyle: React.CSSProperties = {
+  border: "1px solid #e2e8f0",
+  borderRadius: "12px",
+  backgroundColor: "#f8fafc",
+  padding: "10px 12px",
+  display: "grid",
+  gap: "6px",
+};
+
+const priorityExplanationLabelStyle: React.CSSProperties = {
+  ...fieldLabelStyle,
+  textTransform: "none",
+  letterSpacing: 0,
+};
+
+const priorityExplanationListStyle: React.CSSProperties = {
+  margin: 0,
+  paddingLeft: "18px",
+  display: "grid",
+  gap: "4px",
+  fontSize: "13px",
+  lineHeight: 1.5,
+  color: "#334155",
+};
+
+const priorityExplanationEmptyStyle: React.CSSProperties = {
+  fontSize: "13px",
+  lineHeight: 1.5,
+  color: "#64748b",
+};
+
+const sourceDisclosureBadgeStyle: React.CSSProperties = {
+  display: "inline-flex",
+  width: "fit-content",
+  fontSize: "12px",
+  fontWeight: 700,
+  color: "#334155",
+  backgroundColor: "#e2e8f0",
+  borderRadius: "999px",
+  padding: "4px 8px",
 };
 
 const secondaryButtonStyle: React.CSSProperties = {

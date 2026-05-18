@@ -11,8 +11,10 @@ type GraphMessage = {
   conversationId?: string;
   subject?: string;
   receivedDateTime?: string;
+  sentDateTime?: string;
   webLink?: string;
   bodyPreview?: string;
+  hasAttachments?: boolean;
   body?: {
     contentType?: string;
     content?: string;
@@ -44,6 +46,16 @@ type GraphMessage = {
 type GraphMessagesResponse = {
   value?: GraphMessage[];
   "@odata.nextLink"?: string;
+};
+
+type MissingBodyReason =
+  | "graphBodyMissing"
+  | "htmlBodyEmptyAfterStrip"
+  | "attachmentOnlyMessage";
+
+type BodyNormalizationResult = {
+  bodyText: string;
+  missingBodyReason?: MissingBodyReason;
 };
 
 export function normalizeGraphNextCursor(nextLink?: string): string | undefined {
@@ -88,21 +100,44 @@ function stripHtml(html: string): string {
     .trim();
 }
 
-function normalizeBodyText(body?: GraphMessage["body"], bodyPreview?: string): string {
+function normalizeBodyText(
+  body?: GraphMessage["body"],
+  bodyPreview?: string,
+  hasAttachments?: boolean,
+): BodyNormalizationResult {
   const bodyContent = body?.content?.trim();
+  const previewText = normalizeText(bodyPreview);
 
   if (bodyContent) {
+    const isHtmlBody =
+      body?.contentType?.toLowerCase() === "html" || /<[^>]+>/.test(bodyContent);
     const normalizedBody =
-      body?.contentType?.toLowerCase() === "html" || /<[^>]+>/.test(bodyContent)
+      isHtmlBody
         ? stripHtml(bodyContent)
         : bodyContent.replace(/\r\n?/g, "\n").trim();
 
     if (normalizedBody.length > 0) {
-      return normalizedBody;
+      return { bodyText: normalizedBody };
     }
+
+    return {
+      bodyText: previewText,
+      missingBodyReason:
+        isHtmlBody && previewText.length === 0
+          ? "htmlBodyEmptyAfterStrip"
+          : undefined,
+    };
   }
 
-  return normalizeText(bodyPreview);
+  if (previewText.length > 0) {
+    return { bodyText: previewText };
+  }
+
+  return {
+    bodyText: "",
+    missingBodyReason:
+      hasAttachments === true ? "attachmentOnlyMessage" : "graphBodyMissing",
+  };
 }
 
 function normalizeReceivedAt(receivedDateTime?: string): string {
@@ -110,6 +145,18 @@ function normalizeReceivedAt(receivedDateTime?: string): string {
 
   if (!normalized) {
     return "";
+  }
+
+  const timestamp = Date.parse(normalized);
+
+  return Number.isNaN(timestamp) ? normalized : new Date(timestamp).toISOString();
+}
+
+function normalizeSentAt(sentDateTime?: string): string | undefined {
+  const normalized = sentDateTime?.trim() ?? "";
+
+  if (!normalized) {
+    return undefined;
   }
 
   const timestamp = Date.parse(normalized);
@@ -148,11 +195,35 @@ function normalizeHeaders(
   return normalizedHeaders.length > 0 ? normalizedHeaders : undefined;
 }
 
+function logMissingBodyReason(message: GraphMessage, reason?: MissingBodyReason) {
+  if (!reason) {
+    return;
+  }
+
+  console.info("[Action Desk diagnostics] outlookGraphBodyMissing", {
+    reason,
+    messageId: message.id?.trim() || undefined,
+    subject: message.subject?.trim() || undefined,
+    senderEmail: message.from?.emailAddress?.address?.trim() || undefined,
+    bodyContentType: message.body?.contentType?.trim() || undefined,
+    hasBodyContent: Boolean(message.body?.content?.trim()),
+    hasBodyPreview: Boolean(message.bodyPreview?.trim()),
+    hasAttachments: message.hasAttachments === true,
+  });
+}
+
 function mapGraphMessageToRawInboxEmail(message: GraphMessage): RawInboxEmail {
   const id = message.id?.trim() || "";
-  const bodyText = normalizeBodyText(message.body, message.bodyPreview);
+  const bodyResult = normalizeBodyText(
+    message.body,
+    message.bodyPreview,
+    message.hasAttachments,
+  );
+  const bodyText = bodyResult.bodyText;
   const fromEmail = message.from?.emailAddress?.address?.trim() || "";
   const fromName = message.from?.emailAddress?.name?.trim() || fromEmail || "Unknown sender";
+  const sentAt = normalizeSentAt(message.sentDateTime);
+  logMissingBodyReason(message, bodyResult.missingBodyReason);
 
   return {
     id,
@@ -163,9 +234,13 @@ function mapGraphMessageToRawInboxEmail(message: GraphMessage): RawInboxEmail {
     fromName,
     fromEmail,
     receivedAt: normalizeReceivedAt(message.receivedDateTime),
+    ...(sentAt ? { sentAt } : {}),
     bodyText,
     bodyHtml: message.body?.content,
     previewText: normalizePreviewText(message.bodyPreview, bodyText),
+    ...(typeof message.hasAttachments === "boolean"
+      ? { hasAttachments: message.hasAttachments }
+      : {}),
     outlookWebLink: message.webLink?.trim() || undefined,
     toRecipients: normalizeRecipients(message.toRecipients),
     ccRecipients: normalizeRecipients(message.ccRecipients),

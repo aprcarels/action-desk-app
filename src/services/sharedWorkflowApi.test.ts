@@ -5,6 +5,7 @@ import {
   loadAuthSession,
   loadSharedWorkflowBootstrap,
   loadSharedWorkflowHealth,
+  saveSharedWorkflowPreferences,
 } from "./sharedWorkflowApi";
 
 describe("sharedWorkflowApi", () => {
@@ -50,6 +51,49 @@ describe("sharedWorkflowApi", () => {
       context: "/api/admin/backup",
       message: "Only supervisors can create backups.",
     });
+  });
+
+  it("sends the stored session only as a header on shared workflow requests", async () => {
+    const storage = new Map<string, string>([
+      ["action-desk.shared-session-id", "session-secure"],
+    ]);
+    const preferences = {
+      queueScopeView: "my_queue" as const,
+      queueDisplayMode: "list" as const,
+      statusFilter: "open" as const,
+      showSnoozed: false,
+    };
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        preferences,
+      }),
+    });
+
+    vi.stubGlobal("window", {
+      localStorage: {
+        getItem: (key: string) => storage.get(key) ?? null,
+        setItem: (key: string, value: string) => {
+          storage.set(key, value);
+        },
+        removeItem: (key: string) => {
+          storage.delete(key);
+        },
+      },
+      location: { origin: "http://localhost:5173" },
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await saveSharedWorkflowPreferences(preferences);
+
+    const [requestUrl, requestInit] = fetchMock.mock.calls[0] ?? [];
+    const url = new URL(String(requestUrl));
+    const headers = requestInit?.headers as Record<string, string>;
+
+    expect(url.pathname).toBe("/api/workflow/preferences");
+    expect(url.search).toBe("");
+    expect(headers["x-action-desk-session-id"]).toBe("session-secure");
+    expect(JSON.parse(String(requestInit?.body))).toEqual({ preferences });
   });
 
   it("clears a stale stored session when session hydration reports expired Microsoft auth", async () => {
@@ -161,6 +205,73 @@ describe("sharedWorkflowApi", () => {
     ]);
   });
 
+  it("forces sign-out when a protected route reports missing Microsoft token context", async () => {
+    const storage = new Map<string, string>();
+    const dispatchedEvents: Array<{ type?: string; detail?: unknown }> = [];
+
+    vi.stubGlobal("CustomEvent", class {
+      type: string;
+      detail: unknown;
+
+      constructor(type: string, init?: { detail?: unknown }) {
+        this.type = type;
+        this.detail = init?.detail;
+      }
+    });
+
+    vi.stubGlobal("window", {
+      localStorage: {
+        getItem: (key: string) => storage.get(key) ?? null,
+        setItem: (key: string, value: string) => {
+          storage.set(key, value);
+        },
+        removeItem: (key: string) => {
+          storage.delete(key);
+        },
+      },
+      location: { origin: "http://localhost:5173" },
+      dispatchEvent: (event: { type?: string; detail?: unknown }) => {
+        dispatchedEvents.push(event);
+        return true;
+      },
+    });
+
+    storage.set("action-desk.shared-session-id", "backend-session-3");
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 401,
+        json: async () => ({
+          error: {
+            code: "microsoft_token_context_missing",
+            message: "Microsoft token context missing for session",
+            retryable: false,
+            context: "/api/workflow/bootstrap",
+          },
+        }),
+      }),
+    );
+
+    await expect(loadSharedWorkflowBootstrap()).rejects.toMatchObject({
+      code: "stale_microsoft_session",
+      retryable: false,
+      context: "/api/workflow/bootstrap",
+      message: "Your Microsoft session expired. Please sign in again.",
+    });
+
+    expect(storage.has("action-desk.shared-session-id")).toBe(false);
+    expect(dispatchedEvents).toEqual([
+      {
+        type: "action-desk:shared-session-expired",
+        detail: {
+          message: "Your Microsoft session expired. Please sign in again.",
+        },
+      },
+    ]);
+  });
+
   it("preserves the access-changed message when the backend invalidates the current user's session", async () => {
     const storage = new Map<string, string>();
     const dispatchedEvents: Array<{ type?: string; detail?: unknown }> = [];
@@ -237,5 +348,71 @@ describe("sharedWorkflowApi", () => {
     expect(
       getSharedWorkflowErrorMessage(error, "Fallback message"),
     ).toBe("Shared workflow offline");
+  });
+
+  it("preserves CSR email aliases from workflow bootstrap", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          currentUser: {
+            id: "admin-1",
+            name: "Avery Admin",
+            initials: "AA",
+            email: "avery.admin@apexpress.com",
+            role: "admin",
+          },
+          capabilities: ["manage_users", "manage_customer_ownership"],
+          reps: [
+            {
+              employee_id: "rep-1",
+              display_name: "Mia Johnson",
+              employee_email: "mia.johnson@apexpress.com",
+              role: "csr",
+              department: "apexpress_irwindale",
+              is_active: true,
+            },
+          ],
+          customers: [],
+          slaSettings: {
+            firstResponseSlaMinutes: 60,
+            resolutionSlaMinutes: 1440,
+            warningThresholdPercent: 75,
+            warningMinutesBeforeBreach: 15,
+          },
+          workflowState: {
+            reps: [
+              {
+                employee_id: "rep-1",
+                display_name: "Mia Johnson",
+                employee_email: "mia.johnson@apexpress.com",
+                role: "csr",
+                department: "apexpress_irwindale",
+                is_active: true,
+              },
+            ],
+            currentRepId: "admin-1",
+            threadStates: {},
+            threadPresence: {},
+            preferences: {
+              queueScopeView: "my_queue",
+              queueDisplayMode: "list",
+              statusFilter: "open",
+              showSnoozed: false,
+            },
+          },
+        }),
+      }),
+    );
+
+    const bootstrap = await loadSharedWorkflowBootstrap();
+
+    expect(bootstrap.workflowState.reps).toEqual([
+      expect.objectContaining({
+        id: "rep-1",
+        email: "mia.johnson@apexpress.com",
+      }),
+    ]);
   });
 });

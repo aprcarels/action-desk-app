@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { Component, type ReactNode, useEffect, useState } from "react";
 import { CustomerListManager } from "./CustomerListManager";
 import { DiagnosticsPanel } from "./DiagnosticsPanel";
 import { UserAccessManager } from "./UserAccessManager";
@@ -56,7 +56,145 @@ type SettingsPanelProps = {
   };
 };
 
+type SettingsPanelErrorBoundaryProps = {
+  isOpen: boolean;
+  onClose: () => void;
+  children: ReactNode;
+};
+
+type SettingsPanelErrorBoundaryState = {
+  error: Error | null;
+};
+
+class SettingsPanelErrorBoundary extends Component<
+  SettingsPanelErrorBoundaryProps,
+  SettingsPanelErrorBoundaryState
+> {
+  state: SettingsPanelErrorBoundaryState = {
+    error: null,
+  };
+
+  static getDerivedStateFromError(error: Error): SettingsPanelErrorBoundaryState {
+    return { error };
+  }
+
+  componentDidCatch(error: Error) {
+    console.error("SETTINGS PANEL RENDER FAILED", {
+      errorName: error.name,
+      errorMessage: error.message,
+      errorStack: error.stack,
+    });
+  }
+
+  componentDidUpdate(previousProps: SettingsPanelErrorBoundaryProps) {
+    if (previousProps.isOpen && !this.props.isOpen && this.state.error) {
+      this.setState({ error: null });
+    }
+  }
+
+  render() {
+    if (!this.state.error) {
+      return this.props.children;
+    }
+
+    return (
+      <SettingsPanelFallback
+        error={this.state.error}
+        onClose={this.props.onClose}
+      />
+    );
+  }
+}
+
+function SettingsPanelFallback({
+  error,
+  onClose,
+}: {
+  error: Error;
+  onClose: () => void;
+}) {
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="settings-panel-error-title"
+      onClick={onClose}
+      style={{
+        position: "fixed",
+        inset: 0,
+        backgroundColor: "rgba(15, 23, 42, 0.45)",
+        display: "flex",
+        justifyContent: "flex-end",
+        zIndex: 1000,
+      }}
+    >
+      <div
+        onClick={(event) => event.stopPropagation()}
+        style={{
+          width: "min(860px, 100%)",
+          height: "100%",
+          backgroundColor: "#f8fafc",
+          boxShadow: "-16px 0 40px rgba(15, 23, 42, 0.18)",
+          padding: "24px 20px 28px",
+          boxSizing: "border-box",
+          overflowY: "auto",
+        }}
+      >
+        <div
+          style={{
+            border: "1px solid #fecaca",
+            backgroundColor: "#fef2f2",
+            color: "#991b1b",
+            borderRadius: "12px",
+            padding: "16px",
+          }}
+        >
+          <h2 id="settings-panel-error-title" style={{ margin: "0 0 8px", fontSize: "18px" }}>
+            Settings could not be displayed
+          </h2>
+          <p style={{ margin: 0, fontSize: "14px", lineHeight: 1.5 }}>
+            {error.message || "A settings field was not in the expected shape."}
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          style={{
+            marginTop: "16px",
+            border: "1px solid #cbd5e1",
+            backgroundColor: "#ffffff",
+            color: "#0f172a",
+            borderRadius: "10px",
+            padding: "8px 12px",
+            fontSize: "13px",
+            fontWeight: 700,
+            cursor: "pointer",
+          }}
+        >
+          Close
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export function SettingsPanel({
+  isOpen,
+  onClose,
+  ...props
+}: SettingsPanelProps) {
+  if (!isOpen) {
+    return null;
+  }
+
+  return (
+    <SettingsPanelErrorBoundary isOpen={isOpen} onClose={onClose}>
+      <SettingsPanelContent isOpen={isOpen} onClose={onClose} {...props} />
+    </SettingsPanelErrorBoundary>
+  );
+}
+
+function SettingsPanelContent({
   isOpen,
   currentUser,
   reps,
@@ -81,10 +219,43 @@ export function SettingsPanel({
     return null;
   }
 
-  const canManageCustomerOwnership = capabilities.includes("manage_customer_ownership");
-  const canManageSlaSettings = capabilities.includes("manage_sla_settings");
-  const canManageUsers = capabilities.includes("manage_users");
+  const safeCapabilities = Array.isArray(capabilities) ? capabilities : [];
+  const safeReps = Array.isArray(reps) ? reps : [];
+  const safeCustomers = Array.isArray(customers) ? customers : [];
+  const safeAdminUsers = Array.isArray(adminUsers) ? adminUsers : [];
+  const safeSlaSettings = normalizeSlaSettings(slaSettings);
+  const canManageCustomerOwnership =
+    currentUser.role === "admin" ||
+    safeCapabilities.includes("manage_customer_ownership");
+  const canManageSlaSettings =
+    currentUser.role === "admin" || safeCapabilities.includes("manage_sla_settings");
+  const canManageUsers =
+    currentUser.role === "admin" || safeCapabilities.includes("manage_users");
   const canUseAdminTestData = currentUser.role === "admin";
+  const assignmentsCount = safeCustomers.reduce(
+    (count, customer) =>
+      count +
+      (customer.assignedCSRs?.filter((assignment) => assignment.isActive !== false)
+        .length ?? customer.ownerRepIds?.length ?? (customer.ownerRepId ? 1 : 0)),
+    0,
+  );
+
+  useEffect(() => {
+    console.info("[Action Desk settings] data counts", {
+      usersCount: safeAdminUsers.length,
+      repsCount: safeReps.length,
+      customersCount: safeCustomers.length,
+      assignmentsCount,
+      capabilities: safeCapabilities,
+    });
+  }, [
+    assignmentsCount,
+    currentUser.id,
+    safeAdminUsers.length,
+    safeCapabilities,
+    safeCustomers.length,
+    safeReps.length,
+  ]);
 
   return (
     <div
@@ -175,8 +346,8 @@ export function SettingsPanel({
 
         <CustomerListManager
           currentRep={currentUser}
-          reps={reps}
-          customers={customers}
+          reps={safeReps}
+          customers={safeCustomers}
           canManage={canManageCustomerOwnership}
           onSaveCustomer={onSaveCustomer}
           onDeleteCustomer={onDeleteCustomer}
@@ -185,18 +356,18 @@ export function SettingsPanel({
 
         <SlaSettingsManager
           currentUser={currentUser}
-          slaSettings={slaSettings}
+          slaSettings={safeSlaSettings}
           canManage={canManageSlaSettings}
           onSave={onSaveSlaSettings}
         />
 
         {canManageUsers &&
-          adminUsers &&
+          Array.isArray(adminUsers) &&
           onCreateUserAccess &&
           onUpdateUserAccess &&
           onDeactivateUserAccess && (
             <UserAccessManager
-              users={adminUsers}
+              users={safeAdminUsers}
               onCreateUser={onCreateUserAccess}
               onUpdateUser={onUpdateUserAccess}
               onDeactivateUser={onDeactivateUserAccess}

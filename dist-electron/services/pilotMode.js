@@ -14,6 +14,12 @@ function filterInboxEmailsForPilotMode(items, pilotMode = isPilotModeEnabled()) 
     }
     return items.filter((item) => {
         const source = item?.source;
-        return source === "outlook_import" || source === "outlook_graph";
+        const provider = item?.provider;
+        return (source === "outlook_import" ||
+            source === "outlook_graph" ||
+            source === "test_data" ||
+            provider === "outlook_addin_import" ||
+            provider === "outlook_graph" ||
+            provider === "test_data");
     });
 }

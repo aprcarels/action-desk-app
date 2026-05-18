@@ -18,11 +18,13 @@ export function canCurrentUserTakeThread(
     return false;
   }
 
-  return thread.assignedRepId !== currentRep.id;
+  return !thread.assignmentResolution.assignedRepIds.includes(currentRep.id);
 }
 
 export function getDefaultTakeThreadReason(
   thread: WorkflowThread,
 ): AssignmentReason {
-  return thread.assignedRepId ? "Covering for colleague" : "Unassigned";
+  return thread.assignmentResolution.assignmentStatus === "unassigned"
+    ? "Unassigned"
+    : "Covering for colleague";
 }

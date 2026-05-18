@@ -14,6 +14,13 @@ import type {
   WorkflowPreferences,
   WorkflowState,
 } from "../types/actionDesk";
+import {
+  normalizeManagedUsers,
+  normalizeRepProfile,
+  normalizeRepProfiles,
+  normalizeSavedCustomers,
+  normalizeSharedWorkflowBootstrap,
+} from "./sharedWorkflowDataNormalization";
 
 const SESSION_STORAGE_KEY = "action-desk.shared-session-id";
 const EXPIRED_MICROSOFT_SESSION_MESSAGE =
@@ -23,6 +30,7 @@ const SHARED_SESSION_EXPIRED_EVENT = "action-desk:shared-session-expired";
 const STALE_SHARED_SESSION_ERROR_CODES = new Set([
   "microsoft_session_missing",
   "microsoft_session_expired",
+  "microsoft_token_context_missing",
   "stale_microsoft_session",
   "access_changed",
 ]);
@@ -125,15 +133,12 @@ async function parseErrorResponse(response: Response): Promise<SharedWorkflowApi
 async function requestJson<T>(
   pathname: string,
   options?: {
-    method?: "GET" | "POST";
+    method?: "GET" | "POST" | "PATCH";
     body?: unknown;
   },
 ): Promise<T> {
   const sessionId = getSessionId();
   const url = new URL(pathname, sharedApiOrigin);
-  if (sessionId) {
-    url.searchParams.set("sessionId", sessionId);
-  }
 
   let response: Response;
 
@@ -144,9 +149,7 @@ async function requestJson<T>(
         "Content-Type": "application/json",
         "x-action-desk-session-id": sessionId,
       },
-      body: options?.body
-        ? JSON.stringify(sessionId ? { sessionId, ...options.body } : options.body)
-        : undefined,
+      body: options?.body ? JSON.stringify(options.body) : undefined,
     });
   } catch (error) {
     throw createSharedWorkflowError({
@@ -206,7 +209,12 @@ export async function loadAuthSession(): Promise<SharedAuthSessionResponse> {
     clearStoredSharedWorkflowSession();
   }
 
-  return session;
+  return {
+    ...session,
+    currentUser: normalizeRepProfile(session.currentUser) ?? session.currentUser,
+    reps: normalizeRepProfiles(session.reps),
+    capabilities: (session.capabilities ?? []) as AppCapability[],
+  };
 }
 
 export async function signInSharedWorkflow(): Promise<AuthSession> {
@@ -224,7 +232,7 @@ export async function signInSharedWorkflow(): Promise<AuthSession> {
 
   return {
     sessionId: session.sessionId,
-    currentUser: session.currentUser,
+    currentUser: normalizeRepProfile(session.currentUser) ?? session.currentUser,
     capabilities: (session.capabilities ?? []) as AppCapability[],
   };
 }
@@ -251,7 +259,16 @@ export async function loadSharedWorkflowBootstrap(): Promise<{
   slaSettings: SlaSettings;
   workflowState: WorkflowState;
 }> {
-  return requestJson("/api/workflow/bootstrap");
+  const bootstrap = await requestJson<{
+    currentUser: RepProfile | null;
+    capabilities: AppCapability[];
+    reps: RepProfile[];
+    customers: SavedCustomer[];
+    slaSettings: SlaSettings;
+    workflowState: WorkflowState;
+  }>("/api/workflow/bootstrap");
+
+  return normalizeSharedWorkflowBootstrap(bootstrap);
 }
 
 export async function loadSharedWorkflowHealth(): Promise<{
@@ -262,6 +279,7 @@ export async function loadSharedWorkflowHealth(): Promise<{
   repCount: number;
   threadCount: number;
   customerCount: number;
+  assignmentCount?: number;
   serverTime: string;
 }> {
   return requestJson("/api/health");
@@ -314,27 +332,39 @@ export async function saveSharedSlaSettings(
 export async function upsertSharedCustomer(
   customer: SavedCustomerDraft,
 ): Promise<SavedCustomer[]> {
-  const response = await requestJson<{ customers: SavedCustomer[] }>(
-    "/api/workflow/customers/upsert",
+  const response = await requestJson<{
+    customer?: SavedCustomer;
+    customers?: SavedCustomer[];
+  }>(
+    customer.id
+      ? `/api/customers/${encodeURIComponent(customer.id)}`
+      : "/api/customers",
     {
-      method: "POST",
-      body: { customer },
+      method: customer.id ? "PATCH" : "POST",
+      body: customer,
     },
   );
 
-  return response.customers;
+  return normalizeSavedCustomers(
+    response.customers ?? (response.customer ? [response.customer] : []),
+  );
 }
 
 export async function deleteSharedCustomer(customerId: string): Promise<SavedCustomer[]> {
-  const response = await requestJson<{ customers: SavedCustomer[] }>(
-    "/api/workflow/customers/delete",
+  const response = await requestJson<{
+    customer?: SavedCustomer;
+    customers?: SavedCustomer[];
+  }>(
+    `/api/customers/${encodeURIComponent(customerId)}`,
     {
-      method: "POST",
-      body: { customerId },
+      method: "PATCH",
+      body: { isActive: false },
     },
   );
 
-  return response.customers;
+  return normalizeSavedCustomers(
+    response.customers ?? (response.customer ? [response.customer] : []),
+  );
 }
 
 export async function clearSharedCustomers(): Promise<SavedCustomer[]> {
@@ -345,7 +375,7 @@ export async function clearSharedCustomers(): Promise<SavedCustomer[]> {
     },
   );
 
-  return response.customers;
+  return normalizeSavedCustomers(response.customers);
 }
 
 export async function saveSharedThreadState(
@@ -409,16 +439,29 @@ export async function createSharedWorkflowBackup(): Promise<{ backupPath: string
 export async function loadSharedUsers(): Promise<{
   users: ManagedUser[];
 }> {
-  return requestJson("/api/admin/users");
+  const response = await requestJson<{ users: ManagedUser[] }>("/api/admin/users");
+
+  return {
+    users: normalizeManagedUsers(response.users),
+  };
 }
 
 export async function createSharedUser(payload: ManagedUserDraft): Promise<{
   users: ManagedUser[];
 }> {
-  return requestJson("/api/admin/users/create", {
+  const response = await requestJson<{
+    user?: ManagedUser;
+    users?: ManagedUser[];
+  }>("/api/users", {
     method: "POST",
     body: payload,
   });
+
+  return {
+    users: normalizeManagedUsers(
+      response.users ?? (response.user ? [response.user] : []),
+    ),
+  };
 }
 
 export async function updateSharedUserAccess(payload: {
@@ -431,19 +474,37 @@ export async function updateSharedUserAccess(payload: {
 }): Promise<{
   users: ManagedUser[];
 }> {
-  return requestJson("/api/admin/users/update", {
-    method: "POST",
+  const response = await requestJson<{
+    user?: ManagedUser;
+    users?: ManagedUser[];
+  }>(`/api/users/${encodeURIComponent(payload.userId)}`, {
+    method: "PATCH",
     body: payload,
   });
+
+  return {
+    users: normalizeManagedUsers(
+      response.users ?? (response.user ? [response.user] : []),
+    ),
+  };
 }
 
 export async function deactivateSharedUser(userId: string): Promise<{
   users: ManagedUser[];
 }> {
-  return requestJson("/api/admin/users/deactivate", {
-    method: "POST",
-    body: { userId },
+  const response = await requestJson<{
+    user?: ManagedUser;
+    users?: ManagedUser[];
+  }>(`/api/users/${encodeURIComponent(userId)}`, {
+    method: "PATCH",
+    body: { userId, isActive: false },
   });
+
+  return {
+    users: normalizeManagedUsers(
+      response.users ?? (response.user ? [response.user] : []),
+    ),
+  };
 }
 
 function getThreadFallbackKey(item: ProcessedEmail): string {
@@ -451,7 +512,12 @@ function getThreadFallbackKey(item: ProcessedEmail): string {
     return `customer:${item.customerMatch.customerId}`;
   }
 
-  return `sender:${item.email.senderEmail.trim().toLowerCase()}`;
+  const senderEmail =
+    typeof item.email.senderEmail === "string"
+      ? item.email.senderEmail.trim().toLowerCase()
+      : "";
+
+  return `sender:${senderEmail || item.email.id}`;
 }
 
 export async function syncSharedThreadBindings(

@@ -42,6 +42,28 @@ export {
   upsertByConversationId as upsertTicketRecordByConversationId,
 } from "./ticketsRepository";
 export type {
+  DirectoryCounts,
+  ManagedUserMutationResult,
+  SignInRepProfileResolution,
+} from "./workflowDirectoryRepository";
+export {
+  clearSavedCustomers,
+  createManagedUser,
+  deactivateManagedUser,
+  deleteSavedCustomer,
+  getDirectoryCounts,
+  listManagedUsers,
+  listSavedCustomers,
+  listSavedCustomersForUser,
+  listVisibleRepProfiles,
+  resolveCurrentRepProfile,
+  resolveSignInRepProfile,
+  resolveSignInRepProfileStatus,
+  updateManagedUser,
+  upsertSavedCustomer,
+  workflowDirectoryRepository,
+} from "./workflowDirectoryRepository";
+export type {
   IncomingEmail,
   TicketIngestionOptions,
   TicketMessageInsertResult,

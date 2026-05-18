@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.getOrderContextProvider = getOrderContextProvider;
+exports.createOrderContextProvider = createOrderContextProvider;
 const mockOrderContextProvider_1 = require("./orderContextProviders/mockOrderContextProvider");
 const realOrderContextProvider_1 = require("./orderContextProviders/realOrderContextProvider");
 function getEnvValue(name) {
@@ -20,7 +21,15 @@ function resolveOrderContextApiBaseUrl() {
 function getOrderContextProvider() {
     const source = resolveOrderContextSource();
     const apiBaseUrl = resolveOrderContextApiBaseUrl();
-    if (source === "real") {
+    return createOrderContextProvider({
+        source,
+        apiBaseUrl,
+    });
+}
+function createOrderContextProvider(options) {
+    const source = options?.source ?? resolveOrderContextSource();
+    const apiBaseUrl = options?.apiBaseUrl ?? resolveOrderContextApiBaseUrl();
+    if (source === "real" && apiBaseUrl) {
         return (0, realOrderContextProvider_1.createRealOrderContextProvider)({
             apiBaseUrl,
         });

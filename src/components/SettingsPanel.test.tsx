@@ -71,4 +71,39 @@ describe("SettingsPanel SLA settings", () => {
     expect(markup).toContain("Warning Minutes Before Breach");
     expect(markup).toContain("Save SLA Settings");
   });
+
+  it("shows the real configured locations in settings dropdowns", () => {
+    const markup = renderSettingsPanel({
+      currentUser: {
+        ...reps[1],
+        role: "admin",
+        locationId: undefined,
+      },
+      capabilities: [
+        "view_my_queue",
+        "manage_customer_ownership",
+        "manage_users",
+      ],
+    });
+
+    expect(markup).toContain("Apexpress Irwindale");
+    expect(markup).toContain("Apexpress Corona");
+    expect(markup).toContain("worldpackusa Las Vegas");
+    expect(markup).toContain('value="apexpress_irwindale"');
+    expect(markup).toContain('value="apexpress_corona"');
+    expect(markup).toContain('value="worldpackusa_las_vegas"');
+  });
+
+  it("keeps customer management visible for admins even when backend capabilities are sparse", () => {
+    const markup = renderSettingsPanel({
+      currentUser: {
+        ...reps[1],
+        role: "admin",
+      },
+      capabilities: ["view_my_queue"],
+    });
+
+    expect(markup).toContain("Customer Ownership");
+    expect(markup).toContain("Add Customer");
+  });
 });

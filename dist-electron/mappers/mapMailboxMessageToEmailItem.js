@@ -26,12 +26,17 @@ function mapMailboxSourceToEmailSource(source) {
 function mapMailboxMessageToEmailItem(message) {
     return {
         id: message.id,
+        conversationId: message.conversationId,
         senderName: message.fromName?.trim() || message.fromEmail.trim() || "Unknown sender",
         senderEmail: message.fromEmail.trim(),
         subject: message.subject.trim() || "(no subject)",
         receivedAt: message.receivedAt,
+        sentAt: message.sentAt?.trim() || undefined,
         body: message.bodyText?.trim() || message.bodyPreview?.trim() || "",
         previewText: message.bodyPreview?.trim() || message.bodyText?.trim() || "",
+        hasAttachments: message.hasAttachments,
+        toRecipients: [...message.toEmails],
+        ccRecipients: [...message.ccEmails],
         provider: mapMailboxSourceToInboxProvider(message.source),
         source: mapMailboxSourceToEmailSource(message.source),
     };

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { findCustomerMatch, getCustomerMatchSourceLabel } from "./customerMatching";
 import type { EmailItem, SavedCustomer } from "../types/actionDesk";
 
@@ -33,33 +33,51 @@ const customers: SavedCustomer[] = [
 ];
 
 describe("findCustomerMatch", () => {
-  it("prefers exact sender email matches first", () => {
+  let infoSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    infoSpy = vi.spyOn(console, "info").mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("prefers sender domain matches as the primary customer identifier", () => {
     const match = findCustomerMatch(baseEmail, customers);
 
     expect(match).toEqual({
       customerId: "customer-1",
       customerName: "Acme",
-      matchedOn: "sender_email",
-      matchedValue: "ops@acme.com",
+      matchedOn: "domain",
+      matchedValue: "acme.com",
     });
+    expect(infoSpy).toHaveBeenCalledWith(
+      "[Action Desk diagnostics] customerMatchByDomain",
+      expect.objectContaining({
+        customerId: "customer-1",
+        matchedValue: "acme.com",
+      }),
+    );
   });
 
-  it("falls back to sender name before subject and body", () => {
+  it("matches configured customer names in the subject", () => {
     const match = findCustomerMatch(
       {
         ...baseEmail,
         senderEmail: "unknown@example.com",
-        subject: "Shipment update request",
+        senderName: "Shipping Team",
+        subject: "Shipment update request for Acme",
         body: "No customer name in the body.",
       },
       customers,
     );
 
-    expect(match?.matchedOn).toBe("sender_name");
+    expect(match?.matchedOn).toBe("subject");
     expect(match?.customerName).toBe("Acme");
   });
 
-  it("matches sender domain after exact email and before name fallbacks", () => {
+  it("matches sender domain when the customer has no exact emails", () => {
     const match = findCustomerMatch(
       {
         ...baseEmail,
@@ -74,8 +92,37 @@ describe("findCustomerMatch", () => {
     expect(match).toEqual({
       customerId: "customer-3",
       customerName: "Nike",
-      matchedOn: "sender_domain",
+      matchedOn: "domain",
       matchedValue: "nike.com",
+    });
+  });
+
+  it("matches scalar customer.domain when customer.email is null and emails is empty", () => {
+    const match = findCustomerMatch(
+      {
+        ...baseEmail,
+        senderEmail: "buyer@domainonly.com",
+        senderName: "Domain Only Buyer",
+        subject: "Need shipment help",
+        body: "Please help with my order.",
+      },
+      [
+        {
+          id: "customer-domain-only",
+          name: "Domain Only",
+          email: null,
+          emails: [],
+          domain: "domainonly.com",
+          domains: [],
+        } as unknown as SavedCustomer,
+      ],
+    );
+
+    expect(match).toEqual({
+      customerId: "customer-domain-only",
+      customerName: "Domain Only",
+      matchedOn: "domain",
+      matchedValue: "domainonly.com",
     });
   });
 
@@ -101,7 +148,7 @@ describe("findCustomerMatch", () => {
     expect(match).toBeUndefined();
   });
 
-  it("keeps exact email matches ahead of domain matches", () => {
+  it("keeps domain matches ahead of exact email matches", () => {
     const match = findCustomerMatch(
       {
         ...baseEmail,
@@ -109,11 +156,24 @@ describe("findCustomerMatch", () => {
         senderName: "Nike Operations",
         subject: "Nike shipment issue",
       },
-      customers,
+      [
+        {
+          id: "customer-email-only",
+          name: "Email Customer",
+          emails: ["ops@acme.com"],
+          domains: [],
+        },
+        {
+          id: "customer-domain",
+          name: "Domain Customer",
+          emails: [],
+          domains: ["acme.com"],
+        },
+      ],
     );
 
-    expect(match?.matchedOn).toBe("sender_email");
-    expect(match?.customerName).toBe("Acme");
+    expect(match?.matchedOn).toBe("domain");
+    expect(match?.customerName).toBe("Domain Customer");
   });
 
   it("uses subject before body when needed", () => {
@@ -130,11 +190,128 @@ describe("findCustomerMatch", () => {
     expect(match?.matchedOn).toBe("subject");
   });
 
+  it("matches configured customer names in the body", () => {
+    const match = findCustomerMatch(
+      {
+        ...baseEmail,
+        senderEmail: "hsalas@apexpress.com",
+        senderName: "Hector Salas",
+        subject: "Please review",
+        body: "The customer Meliibaby asked for an order status update.",
+      },
+      [
+        {
+          id: "customer-meliibaby",
+          name: "Meliibaby",
+          emails: [],
+          domains: [],
+        },
+      ],
+    );
+
+    expect(match).toMatchObject({
+      customerId: "customer-meliibaby",
+      matchedOn: "body",
+    });
+  });
+
+  it("matches configured customer names in thread text", () => {
+    const match = findCustomerMatch(
+      {
+        ...baseEmail,
+        senderEmail: "hsalas@apexpress.com",
+        senderName: "Hector Salas",
+        subject: "Please review",
+        body: "Looping in the support mailbox.",
+      },
+      [
+        {
+          id: "customer-meliibaby",
+          name: "Meliibaby",
+          emails: [],
+          domains: [],
+        },
+      ],
+      {
+        threadText: "Earlier customer message: Meliibaby needs the POD for ORD-1001.",
+      },
+    );
+
+    expect(match).toMatchObject({
+      customerId: "customer-meliibaby",
+      matchedOn: "thread",
+    });
+  });
+
+  it("does not match generic configured words from message text", () => {
+    const match = findCustomerMatch(
+      {
+        ...baseEmail,
+        senderEmail: "unknown@example.com",
+        senderName: "Unknown Sender",
+        subject: "Customer needs support",
+        body: "The customer is asking for order support.",
+      },
+      [
+        {
+          id: "customer-generic",
+          name: "Customer",
+          emails: [],
+          domains: [],
+        },
+      ],
+    );
+
+    expect(match).toBeUndefined();
+    expect(infoSpy).toHaveBeenCalledWith(
+      "[Action Desk diagnostics] noCustomerMatch",
+      expect.objectContaining({
+        emailId: "email-1",
+        senderDomain: "example.com",
+      }),
+    );
+  });
+
+  it("matches scalar customer.email when no domain match is present", () => {
+    const match = findCustomerMatch(
+      {
+        ...baseEmail,
+        senderEmail: "buyer@personalrelay.com",
+        senderName: "Relay Buyer",
+        subject: "Need shipment help",
+        body: "Please help with my order.",
+      },
+      [
+        {
+          id: "customer-email-scalar",
+          name: "Scalar Email",
+          email: "buyer@personalrelay.com",
+          emails: [],
+          domains: [],
+        },
+      ],
+    );
+
+    expect(match).toEqual({
+      customerId: "customer-email-scalar",
+      customerName: "Scalar Email",
+      matchedOn: "email",
+      matchedValue: "buyer@personalrelay.com",
+    });
+    expect(infoSpy).toHaveBeenCalledWith(
+      "[Action Desk diagnostics] customerMatchByEmail",
+      expect.objectContaining({
+        customerId: "customer-email-scalar",
+        matchedValue: "buyer@personalrelay.com",
+      }),
+    );
+  });
+
   it("formats match source labels for the UI", () => {
-    expect(getCustomerMatchSourceLabel("sender_email")).toBe("Sender Email");
-    expect(getCustomerMatchSourceLabel("sender_domain")).toBe("Sender Domain");
-    expect(getCustomerMatchSourceLabel("sender_name")).toBe("Sender Name");
+    expect(getCustomerMatchSourceLabel("email")).toBe("Email");
+    expect(getCustomerMatchSourceLabel("domain")).toBe("Domain");
     expect(getCustomerMatchSourceLabel("subject")).toBe("Subject");
     expect(getCustomerMatchSourceLabel("body")).toBe("Body");
+    expect(getCustomerMatchSourceLabel("thread")).toBe("Thread");
   });
 });

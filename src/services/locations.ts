@@ -1,4 +1,5 @@
 import type { RepProfile } from "../types/actionDesk";
+import locationsConfig from "../config/actionDeskLocations.json";
 
 export type ActionDeskLocation = {
   id: string;
@@ -6,47 +7,29 @@ export type ActionDeskLocation = {
   domain: "apexpress.com" | "worldpackusa.com";
 };
 
-export const ACTION_DESK_LOCATIONS: ActionDeskLocation[] = [
-  {
-    id: "apexpress-1",
-    name: "Apexpress Irwindale",
-    domain: "apexpress.com",
-  },
-  {
-    id: "apexpress-2",
-    name: "Apexpress Corona",
-    domain: "apexpress.com",
-  },
-  {
-    id: "worldpackusa",
-    name: "worldpackusa Las Vegas",
-    domain: "worldpackusa.com",
-  },
-];
+type ActionDeskLocationConfig = {
+  locations: Array<ActionDeskLocation & { aliases?: string[] }>;
+};
+
+const typedLocationsConfig = locationsConfig as ActionDeskLocationConfig;
+
+export const ACTION_DESK_LOCATIONS: ActionDeskLocation[] =
+  typedLocationsConfig.locations.map(({ id, name, domain }) => ({
+    id,
+    name,
+    domain,
+  }));
 
 function normalizeLocationKey(value: string): string {
   return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, " ");
 }
 
-const LOCATION_ALIASES = new Map<string, string>(
-  ACTION_DESK_LOCATIONS.flatMap((location) => [
-    [normalizeLocationKey(location.id), location.id],
-    [normalizeLocationKey(location.name), location.id],
-  ]),
-);
+const LOCATION_ALIASES = new Map<string, string>();
 
-for (const [alias, locationId] of [
-  ["AP Express Irwindale", "apexpress-1"],
-  ["Apexpress 1", "apexpress-1"],
-  ["Irwindale", "apexpress-1"],
-  ["AP Express Corona", "apexpress-2"],
-  ["Apexpress 2", "apexpress-2"],
-  ["Corona", "apexpress-2"],
-  ["World Pack USA Las Vegas", "worldpackusa"],
-  ["Worldpack USA Las Vegas", "worldpackusa"],
-  ["Worldpackusa", "worldpackusa"],
-] as const) {
-  LOCATION_ALIASES.set(normalizeLocationKey(alias), locationId);
+for (const location of typedLocationsConfig.locations) {
+  for (const alias of [location.id, location.name, ...(location.aliases ?? [])]) {
+    LOCATION_ALIASES.set(normalizeLocationKey(alias), location.id);
+  }
 }
 
 export function normalizeLocationId(value: unknown): string | undefined {
@@ -76,9 +59,19 @@ export function canAccessLocation(
     return true;
   }
 
-  if (!locationId) {
+  const targetLocationId = normalizeLocationId(locationId);
+
+  if (!targetLocationId) {
     return true;
   }
 
-  return normalizeLocationId(currentUser.locationId) === normalizeLocationId(locationId);
+  const currentLocationId = normalizeLocationId(currentUser.locationId);
+
+  if (currentLocationId === targetLocationId) {
+    return true;
+  }
+
+  return (currentUser.allowedLocations ?? [])
+    .map((allowedLocation) => normalizeLocationId(allowedLocation))
+    .includes(targetLocationId);
 }

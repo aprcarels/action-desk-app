@@ -1,7 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { normalizeGraphMessagesResponse } from "./inboxNormalizer";
 
 describe("normalizeGraphMessagesResponse", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("prefers cleaned full HTML body content for bodyText while preserving previewText", () => {
     const result = normalizeGraphMessagesResponse({
       value: [
@@ -132,6 +136,8 @@ describe("normalizeGraphMessagesResponse", () => {
   });
 
   it("returns a valid RawInboxEmail shape when body and preview are empty", () => {
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => undefined);
+
     const result = normalizeGraphMessagesResponse({
       value: [
         {
@@ -161,5 +167,72 @@ describe("normalizeGraphMessagesResponse", () => {
       bodyHtml: "",
       previewText: undefined,
     });
+    expect(infoSpy).toHaveBeenCalledWith(
+      "[Action Desk diagnostics] outlookGraphBodyMissing",
+      expect.objectContaining({
+        reason: "graphBodyMissing",
+        messageId: "msg-5",
+      }),
+    );
+  });
+
+  it("logs when an HTML body strips down to empty text", () => {
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => undefined);
+
+    const result = normalizeGraphMessagesResponse({
+      value: [
+        {
+          id: "msg-empty-html",
+          subject: "Blank HTML",
+          bodyPreview: "",
+          body: {
+            contentType: "html",
+            content: "<html><body><style>.x{}</style><script></script><br></body></html>",
+          },
+        },
+      ],
+    });
+
+    expect(result.emails[0].bodyText).toBe("");
+    expect(infoSpy).toHaveBeenCalledWith(
+      "[Action Desk diagnostics] outlookGraphBodyMissing",
+      expect.objectContaining({
+        reason: "htmlBodyEmptyAfterStrip",
+        messageId: "msg-empty-html",
+      }),
+    );
+  });
+
+  it("preserves hasAttachments and logs attachment-only missing body messages", () => {
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => undefined);
+
+    const result = normalizeGraphMessagesResponse({
+      value: [
+        {
+          id: "msg-attachment-only",
+          subject: "Attached report",
+          bodyPreview: "",
+          hasAttachments: true,
+          body: {
+            contentType: "text",
+            content: "",
+          },
+        },
+      ],
+    });
+
+    expect(result.emails[0]).toMatchObject({
+      id: "msg-attachment-only",
+      bodyText: "",
+      hasAttachments: true,
+    });
+    expect(infoSpy).toHaveBeenCalledWith(
+      "[Action Desk diagnostics] outlookGraphBodyMissing",
+      expect.objectContaining({
+        reason: "attachmentOnlyMessage",
+        messageId: "msg-attachment-only",
+        hasAttachments: true,
+      }),
+    );
   });
 });

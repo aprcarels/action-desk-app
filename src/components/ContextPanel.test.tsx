@@ -1,7 +1,12 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { ContextPanel } from "./ContextPanel";
-import type { ProcessedEmail, RepProfile, WorkflowThread } from "../types/actionDesk";
+import type {
+  AssignmentResolution,
+  ProcessedEmail,
+  RepProfile,
+  WorkflowThread,
+} from "../types/actionDesk";
 
 const reps: RepProfile[] = [
   {
@@ -43,6 +48,14 @@ function buildProcessedEmail(): ProcessedEmail {
 }
 
 function buildThread(item: ProcessedEmail): WorkflowThread {
+  const assignmentResolution: AssignmentResolution = {
+    assignmentStatus: "unassigned",
+    assignmentSource: "none",
+    assignedRepIds: [],
+    assignedRepNames: [],
+    matchType: "none",
+  };
+
   return {
     id: "sender:orders@acme.com",
     groupKey: "sender:orders@acme.com",
@@ -54,6 +67,7 @@ function buildThread(item: ProcessedEmail): WorkflowThread {
     oldestReceivedAt: "2026-04-21T11:15:00.000Z",
     latestActivityAt: "2026-04-21T11:15:00.000Z",
     itemCount: 1,
+    assignmentResolution,
     assignmentHistory: [],
     status: "new",
     notes: [],
@@ -123,5 +137,49 @@ describe("ContextPanel SLA display", () => {
     expect(markup).toContain("Resolution SLA");
     expect(markup).toContain("elapsed 45m / target 1d");
     expect(markup).toContain("Warning Starts");
+    expect(markup).toContain("Triage Signals");
+    expect(markup).toContain("Rules-Based");
+    expect(markup).toContain("Why prioritized");
+    expect(markup).toContain("First reply SLA at risk.");
+  });
+
+  it("shows thread as the matched customer source", () => {
+    const item = {
+      ...buildProcessedEmail(),
+      customerMatch: {
+        customerId: "customer-1",
+        customerName: "Meliibaby",
+        matchedOn: "thread" as const,
+        matchedValue: "Meliibaby needs POD",
+      },
+    };
+    const thread = {
+      ...buildThread(item),
+      title: "Meliibaby",
+      customerName: "Meliibaby",
+    };
+    const markup = renderToStaticMarkup(
+      <ContextPanel
+        item={item}
+        thread={thread}
+        reps={reps}
+        currentRep={reps[0]}
+        pilotMode={false}
+        canTakeThread={true}
+        takeThreadReason="Unassigned"
+        onTakeThreadReasonChange={vi.fn()}
+        onTakeThread={vi.fn()}
+        onRecomputePriority={vi.fn()}
+        onMarkPilotItemActive={vi.fn()}
+        onMarkPilotItemDone={vi.fn()}
+        onMarkPilotItemNotRelevant={vi.fn()}
+        onMarkPilotItemWaitingOnCustomer={vi.fn()}
+        onSnoozePilotItemUntilTomorrow={vi.fn()}
+        onSetPilotUsefulness={vi.fn()}
+      />,
+    );
+
+    expect(markup).toContain("Meliibaby");
+    expect(markup).toContain("Thread");
   });
 });

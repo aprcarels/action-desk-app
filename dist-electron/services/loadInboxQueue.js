@@ -32,9 +32,13 @@ async function loadRawInboxQueue(options) {
         interactiveAuth: options?.interactiveAuth,
     });
     const visibleEmails = (0, pilotMode_1.filterInboxEmailsForPilotMode)(sourceResult.emails, pilotMode);
+    // TODO: Rebuild inbox filtering safely.
+    // Do NOT reintroduce strict filtering that can hide all emails.
+    // Future approach should classify emails, not hard-filter them.
+    const filteredRelevantEmails = visibleEmails;
     return {
-        items: visibleEmails,
-        nextCursor: visibleEmails.length > 0 ? sourceResult.nextCursor : undefined,
+        items: filteredRelevantEmails,
+        nextCursor: sourceResult.nextCursor,
     };
 }
 async function loadInboxQueue(options) {

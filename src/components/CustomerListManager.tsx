@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type {
   CustomerCsrAssignment,
   RepProfile,
@@ -21,6 +21,7 @@ import {
   getLocationLabel,
   normalizeLocationId,
 } from "../services/locations";
+import { ASSIGNED_REP_MISSING_LABEL } from "../services/assignmentLogic";
 
 type CustomerListManagerProps = {
   currentRep: RepProfile;
@@ -60,6 +61,52 @@ function parseDomains(domainsText: string): string[] {
   return normalizeCustomerDomains(domainsText.split("\n"));
 }
 
+function getRepRoleLabel(rep?: Pick<RepProfile, "role">): string {
+  if (rep?.role === "admin") {
+    return "Admin";
+  }
+
+  if (rep?.role === "supervisor") {
+    return "Supervisor";
+  }
+
+  return "Rep";
+}
+
+function getCsrDisplayName(
+  rep?: RepProfile,
+  assignment?: CustomerCsrAssignment,
+): string {
+  return rep?.name || assignment?.repName || ASSIGNED_REP_MISSING_LABEL;
+}
+
+function getCsrDisplayEmail(
+  rep?: RepProfile,
+  assignment?: CustomerCsrAssignment,
+): string {
+  return rep?.email || assignment?.repEmail || "";
+}
+
+function formatCsrOptionLabel(rep: RepProfile): string {
+  return `${rep.name} | ${rep.email} (${getRepRoleLabel(rep)})`;
+}
+
+function formatAssignedCsrLabel(input: {
+  assignment?: CustomerCsrAssignment;
+  primaryOwnerRepId?: string;
+  rep?: RepProfile;
+  repId: string;
+}): string {
+  const role =
+    input.assignment?.assignmentRole ??
+    (input.repId === input.primaryOwnerRepId ? "primary" : "secondary");
+  const email = getCsrDisplayEmail(input.rep, input.assignment);
+
+  return `${getCsrDisplayName(input.rep, input.assignment)}${
+    email ? ` | ${email}` : ""
+  } (${role})`;
+}
+
 function getValidationMessage(
   name: string,
   emails: string[],
@@ -92,6 +139,12 @@ function getValidationMessage(
   return null;
 }
 
+function getCustomerListLogKey(customers: SavedCustomer[]): string {
+  return customers
+    .map((customer) => customer.id)
+    .join("|");
+}
+
 export function CustomerListManager({
   currentRep,
   reps,
@@ -103,6 +156,9 @@ export function CustomerListManager({
 }: CustomerListManagerProps) {
   const [formState, setFormState] = useState<CustomerFormState>(emptyFormState);
   const [showValidation, setShowValidation] = useState(false);
+  const safeReps = Array.isArray(reps) ? reps : [];
+  const safeCustomers = Array.isArray(customers) ? customers : [];
+  const safeLocations = ACTION_DESK_LOCATIONS ?? [];
 
   const parsedEmails = useMemo(
     () => parseEmails(formState.emailsText),
@@ -117,25 +173,53 @@ export function CustomerListManager({
     normalizedName,
     parsedEmails,
     parsedDomains,
-    customers,
+    safeCustomers,
     formState.id,
   );
-  const availableOwnerReps = reps.filter((rep) => rep.isActive !== false);
-  const availableLocations =
-    currentRep.role === "admin"
-      ? ACTION_DESK_LOCATIONS
-      : ACTION_DESK_LOCATIONS.filter((location) => location.id === currentRep.locationId);
-  const visibleCustomers = customers.filter((customer) =>
-    canAccessLocation(currentRep, customer.locationId),
+  const availableOwnerReps = safeReps.filter(
+    (rep) => rep.role === "rep" && rep.isActive !== false,
   );
+  const currentRepLocationId = normalizeLocationId(currentRep.locationId);
+  const availableLocations =
+    currentRep.role === "admin" || !currentRepLocationId
+      ? safeLocations
+      : safeLocations.filter((location) => location.id === currentRepLocationId);
+  const visibleCustomers =
+    currentRep.role === "admin" || (canManage && !currentRepLocationId)
+      ? safeCustomers
+      : safeCustomers.filter((customer) =>
+          canAccessLocation(currentRep, customer.locationId),
+        );
+  const newestVisibleCustomer = visibleCustomers[0];
+  const customerListLogKey = getCustomerListLogKey(safeCustomers);
+  const visibleCustomerListLogKey = getCustomerListLogKey(visibleCustomers);
   const isValid = validationMessage === null;
-  const ownerLocationId = formState.locationId || currentRep.locationId;
+  const ownerLocationId =
+    normalizeLocationId(formState.locationId) ?? currentRepLocationId;
   const visibleOwnerReps = availableOwnerReps.filter((rep) =>
-    currentRep.role === "admin" ? true : rep.locationId === currentRep.locationId,
+    currentRep.role === "admin"
+      ? true
+      : normalizeLocationId(rep.locationId) === currentRepLocationId,
   );
   const locationScopedOwnerReps = visibleOwnerReps.filter((rep) =>
-    ownerLocationId ? rep.locationId === ownerLocationId : true,
+    ownerLocationId ? normalizeLocationId(rep.locationId) === ownerLocationId : true,
   );
+
+  useEffect(() => {
+    console.info("[Action Desk settings] customerListRendered", {
+      customersCount: safeCustomers.length,
+      visibleCustomersCount: visibleCustomers.length,
+      newestCustomerName: newestVisibleCustomer
+        ? getSavedCustomerDisplayName(newestVisibleCustomer)
+        : null,
+    });
+  }, [
+    customerListLogKey,
+    newestVisibleCustomer?.id,
+    safeCustomers.length,
+    visibleCustomerListLogKey,
+    visibleCustomers.length,
+  ]);
 
   function resetForm() {
     setFormState(emptyFormState);
@@ -191,7 +275,7 @@ export function CustomerListManager({
       ownerRepId: formState.ownerRepId || undefined,
       ownerRepIds: getSelectedOwnerIds(),
       assignedCSRs: buildAssignedCsrs(),
-      locationId: normalizeLocationId(formState.locationId) ?? currentRep.locationId,
+      locationId: normalizeLocationId(formState.locationId) ?? currentRepLocationId,
     });
     resetForm();
   }
@@ -205,11 +289,20 @@ export function CustomerListManager({
     setFormState({
       id: customer.id,
       name: customer.name,
-      emailsText: customer.emails.join("\n"),
-      domainsText: customer.domains.join("\n"),
+      emailsText: normalizeCustomerEmails([
+        customer.email,
+        ...normalizeCustomerEmails(customer.emails ?? []),
+      ]).join("\n"),
+      domainsText: normalizeCustomerDomains([
+        customer.domain,
+        ...normalizeCustomerDomains(customer.domains ?? []),
+      ]).join("\n"),
       ownerRepId: primaryOwnerRepId,
       ownerRepIds,
-      locationId: customer.locationId ?? currentRep.locationId ?? "",
+      locationId:
+        normalizeLocationId(customer.locationId) ??
+        currentRepLocationId ??
+        "",
     });
     setShowValidation(false);
   }
@@ -326,7 +419,7 @@ export function CustomerListManager({
                 <option value="">Unassigned</option>
                 {locationScopedOwnerReps.map((rep) => (
                   <option key={rep.id} value={rep.id}>
-                    {rep.name} ({rep.role === "admin" ? "Admin" : rep.role === "supervisor" ? "Supervisor" : "Rep"})
+                    {formatCsrOptionLabel(rep)}
                   </option>
                 ))}
               </select>
@@ -366,7 +459,7 @@ export function CustomerListManager({
                           checked={formState.ownerRepIds.includes(rep.id)}
                           onChange={() => toggleAdditionalOwner(rep.id)}
                         />
-                        {rep.name} ({rep.role === "admin" ? "Admin" : rep.role === "supervisor" ? "Supervisor" : "Rep"})
+                        {formatCsrOptionLabel(rep)}
                       </label>
                     ))
                 )}
@@ -379,7 +472,11 @@ export function CustomerListManager({
               </label>
               <select
                 id="customer-location"
-                value={formState.locationId || currentRep.locationId || ""}
+                value={
+                  normalizeLocationId(formState.locationId) ??
+                  currentRepLocationId ??
+                  ""
+                }
                 onChange={(event) =>
                   setFormState((current) => ({
                     ...current,
@@ -388,7 +485,7 @@ export function CustomerListManager({
                 }
                 style={inputStyle}
               >
-                {!currentRep.locationId && <option value="">Unassigned</option>}
+                {!currentRepLocationId && <option value="">Unassigned</option>}
                 {availableLocations.map((location) => (
                   <option key={location.id} value={location.id}>
                     {location.name}
@@ -474,7 +571,7 @@ export function CustomerListManager({
                   Cancel
                 </button>
               )}
-              {customers.length > 0 && (
+              {safeCustomers.length > 0 && (
                 <button
                   type="button"
                   onClick={onClearAllCustomers}
@@ -511,12 +608,20 @@ export function CustomerListManager({
             const ownerRepIds = getCustomerOwnerRepIds(customer);
             const primaryOwnerRepId = getCustomerPrimaryOwnerId(customer);
             const owners = ownerRepIds.map((repId) => ({
-              assignment: customer.assignedCSRs?.find(
+              assignment: (customer.assignedCSRs ?? []).find(
                 (assignedCsr) => assignedCsr.repId === repId,
               ),
-              rep: reps.find((rep) => rep.id === repId),
+              rep: safeReps.find((rep) => rep.id === repId),
               repId,
             }));
+            const customerEmails = normalizeCustomerEmails([
+              customer.email,
+              ...normalizeCustomerEmails(customer.emails ?? []),
+            ]);
+            const customerDomains = normalizeCustomerDomains([
+              customer.domain,
+              ...normalizeCustomerDomains(customer.domains ?? []),
+            ]);
 
             return (
               <div key={customer.id} style={cardStyle}>
@@ -538,11 +643,12 @@ export function CustomerListManager({
                       {owners.length > 0
                         ? owners
                             .map(({ assignment, rep, repId }) => {
-                              const role =
-                                assignment?.assignmentRole ??
-                                (repId === primaryOwnerRepId ? "primary" : "secondary");
-
-                              return `${rep ? rep.name : "Unknown Rep"} (${role})`;
+                              return formatAssignedCsrLabel({
+                                assignment,
+                                primaryOwnerRepId,
+                                rep,
+                                repId,
+                              });
                             })
                             .join(", ")
                         : "Unassigned"}
@@ -564,9 +670,9 @@ export function CustomerListManager({
                         >
                           Email Addresses
                         </p>
-                        {customer.emails.length > 0 ? (
+                        {customerEmails.length > 0 ? (
                           <div style={{ display: "grid", gap: "4px" }}>
-                            {customer.emails.map((email) => (
+                            {customerEmails.map((email) => (
                               <span key={email} style={{ fontSize: "13px", color: "#475569" }}>
                                 {email}
                               </span>
@@ -592,9 +698,9 @@ export function CustomerListManager({
                         >
                           Company Domains
                         </p>
-                        {customer.domains.length > 0 ? (
+                        {customerDomains.length > 0 ? (
                           <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
-                            {customer.domains.map((domain) => (
+                            {customerDomains.map((domain) => (
                               <span
                                 key={domain}
                                 style={{

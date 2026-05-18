@@ -4,7 +4,7 @@ import type {
   SavedCustomer,
   SavedCustomerDraft,
 } from "../types/actionDesk";
-import { canAccessLocation, normalizeLocationId } from "./locations";
+import { canAccessLocation, getLocationLabel, normalizeLocationId } from "./locations";
 
 const CUSTOMER_SETTINGS_STORAGE_KEY = "action-desk.saved-customers";
 export const BLOCKED_PUBLIC_CUSTOMER_DOMAINS = new Set([
@@ -17,7 +17,39 @@ export const BLOCKED_PUBLIC_CUSTOMER_DOMAINS = new Set([
 ]);
 
 function safeText(value: unknown): string {
-  return typeof value === "string" ? value : "";
+  if (typeof value === "string") {
+    return value;
+  }
+
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(value);
+  }
+
+  return "";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function getStructuredText(value: unknown, keys: string[]): string {
+  if (typeof value === "string") {
+    return value;
+  }
+
+  if (!isRecord(value)) {
+    return "";
+  }
+
+  for (const key of keys) {
+    const candidate = safeText(value[key]);
+
+    if (candidate) {
+      return candidate;
+    }
+  }
+
+  return "";
 }
 
 function collapseWhitespace(value: string): string {
@@ -25,15 +57,31 @@ function collapseWhitespace(value: string): string {
 }
 
 export function normalizeCustomerName(value: unknown): string {
-  return collapseWhitespace(safeText(value));
+  return collapseWhitespace(
+    getStructuredText(value, [
+      "name",
+      "customerName",
+      "customer_name",
+      "company",
+      "displayName",
+      "display_name",
+      "value",
+    ]) || safeText(value),
+  );
 }
 
 export function normalizeCustomerEmail(value: unknown): string {
-  return collapseWhitespace(safeText(value)).toLowerCase();
+  return collapseWhitespace(
+    getStructuredText(value, ["email", "emailAddress", "email_address", "address", "value"]) ||
+      safeText(value),
+  ).toLowerCase();
 }
 
 export function normalizeCustomerDomain(value: unknown): string {
-  let normalizedValue = collapseWhitespace(safeText(value)).toLowerCase();
+  let normalizedValue = collapseWhitespace(
+    getStructuredText(value, ["domain", "domainName", "domain_name", "value"]) ||
+      safeText(value),
+  ).toLowerCase();
 
   if (!normalizedValue) {
     return "";
@@ -62,13 +110,11 @@ export function normalizeCustomerDomain(value: unknown): string {
 }
 
 export function normalizeCustomerEmails(values: unknown): string[] {
-  if (!Array.isArray(values)) {
-    return [];
-  }
+  const rawValues = Array.isArray(values) ? values : values ? [values] : [];
 
   return Array.from(
     new Set(
-      values
+      rawValues
         .map((value) => normalizeCustomerEmail(value))
         .filter((value) => value.length > 0),
     ),
@@ -76,13 +122,11 @@ export function normalizeCustomerEmails(values: unknown): string[] {
 }
 
 export function normalizeCustomerDomains(values: unknown): string[] {
-  if (!Array.isArray(values)) {
-    return [];
-  }
+  const rawValues = Array.isArray(values) ? values : values ? [values] : [];
 
   return Array.from(
     new Set(
-      values
+      rawValues
         .map((value) => normalizeCustomerDomain(value))
         .filter((value) => value.length > 0),
     ),
@@ -108,7 +152,10 @@ export function findConflictingCustomerDomain(
     const conflictingCustomer = customers.find(
       (customer) =>
         customer.id !== excludingCustomerId &&
-        normalizeCustomerDomains(customer.domains).includes(domain),
+        normalizeCustomerDomains([
+          customer.domain,
+          ...normalizeCustomerDomains(customer.domains ?? []),
+        ]).includes(domain),
     );
 
     if (conflictingCustomer) {
@@ -124,7 +171,9 @@ export function findConflictingCustomerDomain(
 
 export function getSavedCustomerDisplayName(customer: {
   name?: string | null;
+  email?: string | null;
   emails?: string[] | null;
+  domain?: string | null;
   domains?: string[] | null;
 }): string {
   const normalizedName = normalizeCustomerName(customer.name);
@@ -133,13 +182,19 @@ export function getSavedCustomerDisplayName(customer: {
     return normalizedName;
   }
 
-  const normalizedEmails = normalizeCustomerEmails(customer.emails);
+  const normalizedEmails = normalizeCustomerEmails([
+    customer.email,
+    ...normalizeCustomerEmails(customer.emails ?? []),
+  ]);
 
   if (normalizedEmails.length > 0) {
     return normalizedEmails[0];
   }
 
-  const normalizedDomains = normalizeCustomerDomains(customer.domains);
+  const normalizedDomains = normalizeCustomerDomains([
+    customer.domain,
+    ...normalizeCustomerDomains(customer.domains ?? []),
+  ]);
 
   if (normalizedDomains.length > 0) {
     return normalizedDomains[0];
@@ -163,8 +218,48 @@ function normalizeAssignedCsr(
     return null;
   }
 
-  const assignment = value as Partial<CustomerCsrAssignment>;
-  const repId = collapseWhitespace(safeText(assignment.repId));
+  const assignment = value as Partial<CustomerCsrAssignment> & {
+    assignment_role?: unknown;
+    employeeId?: unknown;
+    employee_id?: unknown;
+    rep_id?: unknown;
+    repName?: unknown;
+    rep_name?: unknown;
+    employeeName?: unknown;
+    employee_name?: unknown;
+    csrName?: unknown;
+    csr_name?: unknown;
+    name?: unknown;
+    displayName?: unknown;
+    display_name?: unknown;
+    repEmail?: unknown;
+    rep_email?: unknown;
+    employeeEmail?: unknown;
+    employee_email?: unknown;
+    csrEmail?: unknown;
+    csr_email?: unknown;
+    email?: unknown;
+    emailAddress?: unknown;
+    email_address?: unknown;
+    csrId?: unknown;
+    csr_id?: unknown;
+    assignedCsrId?: unknown;
+    assigned_csr_id?: unknown;
+    location_name?: unknown;
+    location?: unknown;
+    is_active?: unknown;
+    active?: unknown;
+  };
+  const repId = collapseWhitespace(
+    safeText(assignment.repId) ||
+      safeText(assignment.employeeId) ||
+      safeText(assignment.employee_id) ||
+      safeText(assignment.rep_id) ||
+      safeText(assignment.csrId) ||
+      safeText(assignment.csr_id) ||
+      safeText(assignment.assignedCsrId) ||
+      safeText(assignment.assigned_csr_id),
+  );
 
   if (!repId) {
     return null;
@@ -172,28 +267,68 @@ function normalizeAssignedCsr(
 
   const assignmentRole =
     assignment.assignmentRole === "secondary" ||
-    assignment.assignmentRole === "backup"
-      ? assignment.assignmentRole
+    assignment.assignment_role === "secondary" ||
+    assignment.assignmentRole === "backup" ||
+    assignment.assignment_role === "backup"
+      ? ((assignment.assignmentRole ?? assignment.assignment_role) as CustomerCsrAssignment["assignmentRole"])
       : "primary";
-  const locationName = collapseWhitespace(safeText(assignment.locationName));
+  const locationName = collapseWhitespace(
+    safeText(assignment.locationName) ||
+      safeText(assignment.location_name) ||
+      safeText(assignment.location),
+  );
+  const repName =
+    normalizeCustomerName(assignment.repName) ||
+    normalizeCustomerName(assignment.rep_name) ||
+    normalizeCustomerName(assignment.employeeName) ||
+    normalizeCustomerName(assignment.employee_name) ||
+    normalizeCustomerName(assignment.csrName) ||
+    normalizeCustomerName(assignment.csr_name) ||
+    normalizeCustomerName(assignment.displayName) ||
+    normalizeCustomerName(assignment.display_name) ||
+    normalizeCustomerName(assignment.name);
+  const repEmail =
+    normalizeCustomerEmail(assignment.repEmail) ||
+    normalizeCustomerEmail(assignment.rep_email) ||
+    normalizeCustomerEmail(assignment.employeeEmail) ||
+    normalizeCustomerEmail(assignment.employee_email) ||
+    normalizeCustomerEmail(assignment.csrEmail) ||
+    normalizeCustomerEmail(assignment.csr_email) ||
+    normalizeCustomerEmail(assignment.email) ||
+    normalizeCustomerEmail(assignment.emailAddress) ||
+    normalizeCustomerEmail(assignment.email_address);
 
   return {
     repId,
+    repName: repName || undefined,
+    repEmail: repEmail || undefined,
     assignmentRole,
     locationName: locationName || undefined,
-    isActive: assignment.isActive !== false,
+    isActive: assignment.isActive !== false && assignment.is_active !== false && assignment.active !== false,
   };
 }
 
 function normalizeOwnerRepIds(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
+  const rawValues = Array.isArray(value) ? value : value ? [value] : [];
 
   return Array.from(
     new Set(
-      value
-        .map((repId) => collapseWhitespace(safeText(repId)))
+      rawValues
+        .map((repId) =>
+          collapseWhitespace(
+            getStructuredText(repId, [
+              "id",
+              "repId",
+              "rep_id",
+              "employeeId",
+              "employee_id",
+              "locationId",
+              "location_id",
+              "name",
+              "value",
+            ]) || safeText(repId),
+          ),
+        )
         .filter((repId) => repId.length > 0),
     ),
   );
@@ -283,15 +418,88 @@ export function normalizeSavedCustomer(value: unknown): SavedCustomer | null {
     return null;
   }
 
-  const customer = value as Partial<SavedCustomer>;
-  const id = collapseWhitespace(safeText(customer.id)) || createCustomerId();
-  const name = normalizeCustomerName(customer.name);
-  const emails = normalizeCustomerEmails(customer.emails);
-  const domains = normalizeCustomerDomains(customer.domains);
-  const ownerRepId = collapseWhitespace(safeText(customer.ownerRepId)) || undefined;
-  const ownerRepIds = normalizeOwnerRepIds(customer.ownerRepIds);
+  const customer = value as Partial<SavedCustomer> & {
+    customerId?: unknown;
+    customer_id?: unknown;
+    customerName?: unknown;
+    customer_name?: unknown;
+    company?: unknown;
+    displayName?: unknown;
+    display_name?: unknown;
+    email?: unknown;
+    domain?: unknown;
+    assignedCsrId?: unknown;
+    assignedCSRId?: unknown;
+    assigned_csr_id?: unknown;
+    assignedCsrs?: unknown;
+    assigned_csrs?: unknown;
+    assignments?: unknown;
+    customerAssignments?: unknown;
+    csrId?: unknown;
+    csr_id?: unknown;
+    repId?: unknown;
+    rep_id?: unknown;
+    owner_rep_id?: unknown;
+    owner_rep_ids?: unknown;
+    location?: unknown;
+    locationId?: unknown;
+    location_id?: unknown;
+    locationName?: unknown;
+    location_name?: unknown;
+    locations?: unknown;
+    locationIds?: unknown;
+    location_ids?: unknown;
+    isActive?: unknown;
+    is_active?: unknown;
+    active?: unknown;
+  };
+  const id =
+    collapseWhitespace(safeText(customer.id)) ||
+    collapseWhitespace(safeText(customer.customerId)) ||
+    collapseWhitespace(safeText(customer.customer_id)) ||
+    createCustomerId();
+  const name =
+    normalizeCustomerName(customer.name) ||
+    normalizeCustomerName(customer.customerName) ||
+    normalizeCustomerName(customer.customer_name) ||
+    normalizeCustomerName(customer.company) ||
+    normalizeCustomerName(customer.displayName) ||
+    normalizeCustomerName(customer.display_name);
+  const email = normalizeCustomerEmail(customer.email);
+  const emails = normalizeCustomerEmails([
+    email,
+    ...normalizeCustomerEmails(customer.emails ?? []),
+  ]);
+  const domain = normalizeCustomerDomain(customer.domain);
+  const domains = normalizeCustomerDomains([
+    domain,
+    ...normalizeCustomerDomains(customer.domains ?? []),
+  ]);
+  const assignedCsrId =
+    collapseWhitespace(safeText(customer.assignedCsrId)) ||
+    collapseWhitespace(safeText(customer.assignedCSRId)) ||
+    collapseWhitespace(safeText(customer.assigned_csr_id)) ||
+    collapseWhitespace(safeText(customer.csrId)) ||
+    collapseWhitespace(safeText(customer.csr_id)) ||
+    collapseWhitespace(safeText(customer.repId)) ||
+    collapseWhitespace(safeText(customer.rep_id)) ||
+    undefined;
+  const ownerRepId =
+    collapseWhitespace(safeText(customer.ownerRepId)) ||
+    collapseWhitespace(safeText(customer.owner_rep_id)) ||
+    assignedCsrId ||
+    undefined;
+  const ownerRepIds = normalizeOwnerRepIds([
+    ...normalizeOwnerRepIds(customer.ownerRepIds),
+    ...normalizeOwnerRepIds(customer.owner_rep_ids),
+    assignedCsrId,
+  ]);
   const assignedCSRs = normalizeCustomerAssignments(
-    customer.assignedCSRs,
+    customer.assignedCSRs ??
+      customer.assignedCsrs ??
+      customer.assigned_csrs ??
+      customer.customerAssignments ??
+      customer.assignments,
     ownerRepId,
     ownerRepIds,
   );
@@ -310,7 +518,37 @@ export function normalizeSavedCustomer(value: unknown): SavedCustomer | null {
       ownerRepIds: allOwnerRepIds,
       assignedCSRs,
     }) ?? ownerRepId;
-  const locationId = normalizeLocationId(customer.locationId);
+  const locationIds = Array.from(
+    new Set(
+      [
+        normalizeLocationId(customer.locationId),
+        normalizeLocationId(customer.location_id),
+        normalizeLocationId(customer.locationName),
+        normalizeLocationId(customer.location_name),
+        normalizeLocationId(customer.location),
+        ...normalizeOwnerRepIds(customer.locationIds).map((location) =>
+          normalizeLocationId(location),
+        ),
+        ...normalizeOwnerRepIds(customer.location_ids).map((location) =>
+          normalizeLocationId(location),
+        ),
+        ...normalizeOwnerRepIds(customer.locations).map((location) =>
+          normalizeLocationId(location),
+        ),
+      ].filter((locationId): locationId is string => Boolean(locationId)),
+    ),
+  );
+  const locationId =
+    locationIds[0] ??
+    normalizeLocationId(customer.locationId) ??
+    normalizeLocationId(customer.location_id) ??
+    normalizeLocationId(customer.locationName) ??
+    normalizeLocationId(customer.location_name) ??
+    normalizeLocationId(customer.location);
+  const locationName =
+    normalizeCustomerName(customer.locationName) ||
+    normalizeCustomerName(customer.location_name) ||
+    (locationId ? getLocationLabel(locationId) : undefined);
 
   if (name.length === 0 && emails.length === 0 && domains.length === 0) {
     return null;
@@ -321,7 +559,21 @@ export function normalizeSavedCustomer(value: unknown): SavedCustomer | null {
     name: name.length > 0 ? name : getSavedCustomerDisplayName({ emails, domains }),
     emails,
     domains,
+    assignedCsrId: primaryOwnerRepId ?? "",
+    assignedCSRs,
+    isActive:
+      customer.isActive === false || customer.is_active === false || customer.active === false
+        ? false
+        : true,
   };
+
+  if (emails[0]) {
+    normalizedCustomer.email = emails[0];
+  }
+
+  if (domains[0]) {
+    normalizedCustomer.domain = domains[0];
+  }
 
   if (primaryOwnerRepId) {
     normalizedCustomer.ownerRepId = primaryOwnerRepId;
@@ -331,12 +583,16 @@ export function normalizeSavedCustomer(value: unknown): SavedCustomer | null {
     normalizedCustomer.ownerRepIds = allOwnerRepIds;
   }
 
-  if (assignedCSRs.length > 0) {
-    normalizedCustomer.assignedCSRs = assignedCSRs;
-  }
-
   if (locationId) {
     normalizedCustomer.locationId = locationId;
+  }
+
+  if (locationName) {
+    normalizedCustomer.locationName = locationName;
+  }
+
+  if (locationIds.length > 0) {
+    normalizedCustomer.locations = locationIds;
   }
 
   return normalizedCustomer;
@@ -420,8 +676,8 @@ export function upsertSavedCustomer(
   const normalizedCustomer = normalizeSavedCustomer({
     id: draft.id,
     name: draft.name,
-    emails: draft.emails,
-    domains: draft.domains,
+    emails: draft.emails ?? [],
+    domains: draft.domains ?? [],
     ownerRepId: ownerRepId ?? draft.ownerRepId,
     ownerRepIds: draft.ownerRepIds,
     assignedCSRs: draft.assignedCSRs,

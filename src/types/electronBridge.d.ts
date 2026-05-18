@@ -11,7 +11,8 @@ declare global {
         isElectron: boolean;
         isDev: boolean;
         userDataPath: string;
-        recommendedRepositoryBackend: "sqlite";
+        recommendedRepositoryBackend: "sqlite" | "api";
+        actionDeskApiUrl?: string | null;
         inboxSource?: string;
         appOrigin?: string | null;
         apiOrigin?: string | null;
@@ -45,8 +46,18 @@ declare global {
           initials: string;
           email: string;
           role: "rep" | "supervisor" | "admin";
+          locationId?: string;
           isActive?: boolean;
         } | null;
+        reps?: Array<{
+          id: string;
+          name: string;
+          initials: string;
+          email: string;
+          role: "rep" | "supervisor" | "admin";
+          locationId?: string;
+          isActive?: boolean;
+        }>;
         capabilities: string[];
       }>;
       signOut?: (sessionId: string) => Promise<{

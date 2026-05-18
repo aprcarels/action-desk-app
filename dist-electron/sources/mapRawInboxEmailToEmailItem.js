@@ -14,6 +14,9 @@ function mapInboxProviderToEmailSource(provider) {
     if (provider === "outlook_graph") {
         return "outlook_graph";
     }
+    if (provider === "test_data") {
+        return "test_data";
+    }
     return "seeded";
 }
 function mapRawInboxEmailToEmailItem(rawEmail) {
@@ -21,13 +24,20 @@ function mapRawInboxEmailToEmailItem(rawEmail) {
     const bodyText = rawEmail.bodyText.trim() || previewText;
     return {
         id: rawEmail.id,
+        conversationId: rawEmail.threadId?.trim() || undefined,
+        locationId: rawEmail.locationId?.trim() || undefined,
         senderName: rawEmail.fromName.trim() || rawEmail.fromEmail.trim() || "Unknown sender",
         senderEmail: rawEmail.fromEmail.trim(),
         subject: rawEmail.subject.trim() || "(no subject)",
         receivedAt: rawEmail.receivedAt.trim(),
+        sentAt: rawEmail.sentAt?.trim() || undefined,
         body: bodyText,
         previewText,
+        hasAttachments: rawEmail.hasAttachments === true,
+        toRecipients: rawEmail.toRecipients?.map((recipient) => recipient.trim()).filter(Boolean),
+        ccRecipients: rawEmail.ccRecipients?.map((recipient) => recipient.trim()).filter(Boolean),
         provider: rawEmail.provider,
         source: mapInboxProviderToEmailSource(rawEmail.provider),
+        outlookWebLink: rawEmail.outlookWebLink?.trim() || undefined,
     };
 }

@@ -69,10 +69,13 @@ function isPersistedRawInboxEmail(value: unknown): value is RawInboxEmail {
     typeof candidate.receivedAt === "string" &&
     typeof candidate.bodyText === "string" &&
     typeof candidate.provider === "string" &&
+    (candidate.sentAt === undefined || typeof candidate.sentAt === "string") &&
     (candidate.threadId === undefined || typeof candidate.threadId === "string") &&
     (candidate.locationId === undefined || typeof candidate.locationId === "string") &&
     (candidate.bodyHtml === undefined || typeof candidate.bodyHtml === "string") &&
     (candidate.previewText === undefined || typeof candidate.previewText === "string") &&
+    (candidate.hasAttachments === undefined ||
+      typeof candidate.hasAttachments === "boolean") &&
     (candidate.outlookWebLink === undefined ||
       typeof candidate.outlookWebLink === "string") &&
     (candidate.toRecipients === undefined ||
