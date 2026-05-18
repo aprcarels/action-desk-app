@@ -25,6 +25,8 @@ type ThreadConversationViewProps = {
   caseCopyFeedback: "idle" | "success" | "error";
   rawCaseCopyFeedback: "idle" | "success" | "error";
   regeneratingReply: boolean;
+  outlookDraftCreationStatus?: "idle" | "creating" | "success" | "error";
+  canCreateOutlookDraft?: boolean;
   replyActionError: string | null;
   notesOpen: boolean;
   replyHistoryOpen: boolean;
@@ -37,6 +39,7 @@ type ThreadConversationViewProps = {
   onReplyHistoryOpenChange: (nextOpen: boolean) => void;
   onOlderMessagesOpenChange: (nextOpen: boolean) => void;
   onCopyReply: () => void;
+  onCreateOutlookDraft?: () => void;
   onCopyReplyAndOpenOutlook: () => void;
   onCopyCaseForReview: () => void;
   onCopyRawCaseJson: () => void;
@@ -70,6 +73,8 @@ export function ThreadConversationView({
   caseCopyFeedback,
   rawCaseCopyFeedback,
   regeneratingReply,
+  outlookDraftCreationStatus = "idle",
+  canCreateOutlookDraft = false,
   replyActionError,
   notesOpen,
   replyHistoryOpen,
@@ -82,6 +87,7 @@ export function ThreadConversationView({
   onReplyHistoryOpenChange,
   onOlderMessagesOpenChange,
   onCopyReply,
+  onCreateOutlookDraft,
   onCopyReplyAndOpenOutlook,
   onCopyCaseForReview,
   onCopyRawCaseJson,
@@ -302,6 +308,51 @@ export function ThreadConversationView({
                     ? "Clipboard Unavailable"
                     : "Copy Reply"}
             </button>
+            {canCreateOutlookDraft && (
+              <button
+                type="button"
+                onClick={onCreateOutlookDraft}
+                disabled={
+                  !hasReplyDraft ||
+                  outlookDraftCreationStatus === "creating" ||
+                  outlookDraftCreationStatus === "success"
+                }
+                title="Create a saved Outlook reply draft. Action Desk will not send it."
+                style={{
+                  ...secondaryButtonStyle,
+                  backgroundColor:
+                    outlookDraftCreationStatus === "success"
+                      ? "#dcfce7"
+                      : outlookDraftCreationStatus === "error"
+                        ? "#fee2e2"
+                        : "#eff6ff",
+                  color:
+                    outlookDraftCreationStatus === "success"
+                      ? "#166534"
+                      : outlookDraftCreationStatus === "error"
+                        ? "#991b1b"
+                        : "#1d4ed8",
+                  borderColor:
+                    outlookDraftCreationStatus === "success"
+                      ? "#86efac"
+                      : outlookDraftCreationStatus === "error"
+                        ? "#fecaca"
+                        : "#93c5fd",
+                  cursor:
+                    !hasReplyDraft ||
+                    outlookDraftCreationStatus === "creating" ||
+                    outlookDraftCreationStatus === "success"
+                      ? "not-allowed"
+                      : "pointer",
+                }}
+              >
+                {outlookDraftCreationStatus === "creating"
+                  ? "Creating Draft..."
+                  : outlookDraftCreationStatus === "success"
+                    ? "Draft Created"
+                    : "Create Outlook Draft"}
+              </button>
+            )}
             <button
               type="button"
               onClick={onRegenerateReply}

@@ -1752,4 +1752,67 @@ describe("appServer Outlook webhooks", () => {
       await cleanupOutlookTestContext(server, tempDir);
     }
   });
+
+  it("creates a saved Outlook reply draft with the Action Desk reply text", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 201,
+      text: async () =>
+        JSON.stringify({
+          id: "draft-1",
+          subject: "Re: Need help",
+          webLink: "https://outlook.office.com/mail/deeplink/compose/draft-1",
+        }),
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { handler, tempDir } = createOutlookTestContext({
+      authProvider: {
+        getAccessTokenForSession: vi.fn().mockResolvedValue("token-123"),
+      },
+    });
+    const { server, origin } = await startTestServer(handler);
+
+    try {
+      const response = await nativeFetch(`${origin}/api/outlook/reply-drafts`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-action-desk-session-id": "session-active",
+        },
+        body: JSON.stringify({
+          messageId: "msg-1",
+          replyText: "Hi,\n\nI will check this shipment.\n\nBest,\nSupport Team",
+        }),
+      });
+      const payload = (await response.json()) as {
+        draft?: { id?: string; webLink?: string };
+        webLink?: string;
+      };
+      const [url, init] = fetchMock.mock.calls[0] ?? [];
+      const graphPayload = JSON.parse(String(init?.body));
+
+      expect(response.status).toBe(200);
+      expect(payload.draft).toMatchObject({
+        id: "draft-1",
+        webLink: "https://outlook.office.com/mail/deeplink/compose/draft-1",
+      });
+      expect(payload.webLink).toBe(
+        "https://outlook.office.com/mail/deeplink/compose/draft-1",
+      );
+      expect(url).toBe("https://graph.microsoft.com/v1.0/me/messages/msg-1/createReply");
+      expect(init?.method).toBe("POST");
+      expect(init?.headers).toMatchObject({
+        Authorization: "Bearer token-123",
+        "Content-Type": "application/json",
+      });
+      expect(graphPayload).toEqual({
+        comment: "Hi,\n\nI will check this shipment.\n\nBest,\nSupport Team",
+      });
+      expect(String(url)).not.toContain("/send");
+    } finally {
+      await cleanupOutlookTestContext(server, tempDir);
+    }
+  });
 });

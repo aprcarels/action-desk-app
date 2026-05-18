@@ -1,13 +1,13 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.graphMailReadScopes = void 0;
+exports.graphMailReadWriteScopes = void 0;
 exports.getMsalRuntimeConfig = getMsalRuntimeConfig;
 exports.describeMissingMsalConfig = describeMissingMsalConfig;
 exports.createMsalConfiguration = createMsalConfiguration;
-exports.createMailReadPopupRequest = createMailReadPopupRequest;
-exports.createMailReadSilentRequest = createMailReadSilentRequest;
+exports.createMailReadWritePopupRequest = createMailReadWritePopupRequest;
+exports.createMailReadWriteSilentRequest = createMailReadWriteSilentRequest;
 const env_1 = require("../utils/env");
-exports.graphMailReadScopes = ["Mail.Read"];
+exports.graphMailReadWriteScopes = ["Mail.ReadWrite"];
 const MSAL_CALLBACK_PATH = "/auth/popup-callback.html";
 function getMsalRuntimeConfig() {
     return {
@@ -89,20 +89,20 @@ function createMsalConfiguration(config) {
         },
     };
 }
-function createMailReadPopupRequest() {
+function createMailReadWritePopupRequest() {
     const redirectUri = resolveAuthCallbackRedirectUri(getMsalRuntimeConfig());
     if ((0, env_1.getEnv)("DEV") === "true") {
         console.info("[Action Desk] MSAL popup redirect URI:", redirectUri);
     }
     return {
-        scopes: exports.graphMailReadScopes,
+        scopes: exports.graphMailReadWriteScopes,
         prompt: "select_account",
         redirectUri,
     };
 }
-function createMailReadSilentRequest(account) {
+function createMailReadWriteSilentRequest(account) {
     return {
-        scopes: exports.graphMailReadScopes,
+        scopes: exports.graphMailReadWriteScopes,
         account,
     };
 }

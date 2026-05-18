@@ -111,7 +111,10 @@ function buildThread(item: ProcessedEmail): WorkflowThread {
 
 function renderConversation(
   item: ProcessedEmail,
-  options: { canOpenOutlook?: boolean } = {},
+  options: {
+    canCreateOutlookDraft?: boolean;
+    canOpenOutlook?: boolean;
+  } = {},
 ): string {
   return renderToStaticMarkup(
     <ThreadConversationView
@@ -123,6 +126,8 @@ function renderConversation(
       caseCopyFeedback="idle"
       rawCaseCopyFeedback="idle"
       regeneratingReply={false}
+      outlookDraftCreationStatus="idle"
+      canCreateOutlookDraft={options.canCreateOutlookDraft ?? false}
       replyActionError={null}
       notesOpen={false}
       replyHistoryOpen={false}
@@ -135,6 +140,7 @@ function renderConversation(
       onReplyHistoryOpenChange={vi.fn()}
       onOlderMessagesOpenChange={vi.fn()}
       onCopyReply={vi.fn()}
+      onCreateOutlookDraft={vi.fn()}
       onCopyReplyAndOpenOutlook={vi.fn()}
       onCopyCaseForReview={vi.fn()}
       onCopyRawCaseJson={vi.fn()}
@@ -177,5 +183,17 @@ describe("ThreadConversationView source disclosure", () => {
 
     expect(markup).toContain("Copy Reply");
     expect(markup).toContain("Copy &amp; Open Outlook");
+  });
+
+  it("shows Outlook draft creation only when Graph draft identity is available", () => {
+    const item = buildProcessedEmail();
+
+    expect(renderConversation(item)).not.toContain("Create Outlook Draft");
+
+    const markup = renderConversation(item, {
+      canCreateOutlookDraft: true,
+    });
+
+    expect(markup).toContain("Create Outlook Draft");
   });
 });

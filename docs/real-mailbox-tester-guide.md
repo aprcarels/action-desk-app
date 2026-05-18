@@ -37,8 +37,9 @@ In real mailbox mode, the queue should load real Outlook mailbox emails only. Se
 ## How Microsoft Sign-In Works
 
 - The app will prompt you to sign in with Microsoft if needed.
-- It requests read-only mailbox access with `Mail.Read`.
-- Action Desk uses that access to read inbox emails for triage.
+- It requests mailbox read/write access with `Mail.ReadWrite`.
+- Action Desk uses that access to read inbox emails for triage and create saved Outlook reply drafts when you choose that action.
+- It does not request `Mail.Send`, and it does not send email.
 - If you are already signed in, it may load without showing the popup again.
 
 If sign-in or Azure app configuration is not working, the inbox should show a clear error message instead of loading the queue.
@@ -63,6 +64,6 @@ Concrete examples are most helpful. If something feels wrong, please share the e
 
 ## Known Limitations
 
-- Read-only pilot: Action Desk does not send emails or update Outlook.
-- No send/reply integration: drafts must be copied manually into Outlook if needed.
+- Draft-only Outlook integration: Action Desk can create a saved reply draft for live Outlook Graph messages, but it does not send email.
+- Manual fallback remains available: use `Copy & Open Outlook` if draft creation is unavailable.
 - Early pilot quality: classification, prioritization, and draft quality will still be uneven on some real emails.

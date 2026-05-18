@@ -97,6 +97,7 @@ import {
 import {
   clearStoredSharedWorkflowSession,
   clearSharedCustomers,
+  createOutlookReplyDraft,
   createSharedTestQueueData,
   createSharedUser,
   createSharedWorkflowBackup,
@@ -726,6 +727,22 @@ function sortVisibleQueueItemsByAge(
   });
 }
 
+function getOutlookReplyDraftMessageId(item?: ProcessedEmail): string {
+  if (!item) {
+    return "";
+  }
+
+  const isOutlookGraphMessage =
+    item.email.source === "outlook_graph" ||
+    item.email.provider === "outlook_graph";
+
+  if (!isOutlookGraphMessage) {
+    return "";
+  }
+
+  return (item.email.providerMessageId ?? item.email.id).trim();
+}
+
 export default function App() {
   const pilotMode = isPilotModeEnabled();
   const persistedQueueEnabled = isPersistedQueueEnabled();
@@ -780,6 +797,8 @@ export default function App() {
     "idle" | "success" | "error"
   >("idle");
   const [regeneratingReply, setRegeneratingReply] = useState(false);
+  const [outlookDraftCreationStatus, setOutlookDraftCreationStatus] =
+    useState<"idle" | "creating" | "success" | "error">("idle");
   const [retryingEmailId, setRetryingEmailId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [urgencyFilter, setUrgencyFilter] = useState<
@@ -1098,6 +1117,7 @@ export default function App() {
     setCopyFeedback("idle");
     setCaseCopyFeedback("idle");
     setRawCaseCopyFeedback("idle");
+    setOutlookDraftCreationStatus("idle");
     setReplyActionError(null);
   }
 
@@ -2298,6 +2318,49 @@ export default function App() {
       }
     }
 
+    async function handleCreateOutlookDraft() {
+      if (
+        !selectedItem ||
+        selectedItem.status !== "processed" ||
+        !hasReplyDraft ||
+        !selectedOutlookDraftMessageId
+      ) {
+        setReplyActionError(
+          "A live Outlook message and reply draft are required before Action Desk can create an Outlook draft.",
+        );
+        return;
+      }
+
+      if (outlookDraftCreationStatus === "creating") {
+        return;
+      }
+
+      setReplyActionError(null);
+      setOutlookDraftCreationStatus("creating");
+
+      try {
+        const draft = await createOutlookReplyDraft({
+          messageId: selectedOutlookDraftMessageId,
+          replyText: selectedReplyDraft,
+        });
+
+        setOutlookDraftCreationStatus("success");
+        showTemporaryProcessingStatus("Outlook reply draft created.");
+
+        if (draft.webLink) {
+          window.open(draft.webLink, "_blank", "noopener,noreferrer");
+        }
+      } catch (error) {
+        setOutlookDraftCreationStatus("error");
+        setReplyActionError(
+          `${getSharedWorkflowErrorMessage(
+            error,
+            "Outlook reply draft could not be created.",
+          )} Your Action Desk reply is still below. Use Copy & Open Outlook instead.`,
+        );
+      }
+    }
+
     async function handleCopyCaseForReview() {
       if (!selectedItem) {
         return;
@@ -2396,6 +2459,7 @@ export default function App() {
 
       setRegeneratingReply(true);
       setCopyFeedback("idle");
+      setOutlookDraftCreationStatus("idle");
       setReplyActionError(null);
 
       const generationContext = buildReplyGenerationContext(
@@ -3207,6 +3271,12 @@ export default function App() {
       : undefined;
     const selectedReplyDraft = selectedItem?.result?.replyDraft.trim() ?? "";
     const hasReplyDraft = selectedReplyDraft.length > 0;
+    const selectedOutlookDraftMessageId = getOutlookReplyDraftMessageId(selectedItem);
+    const canCreateOutlookDraft = Boolean(
+      desktopRuntimeInfo?.isElectron &&
+        selectedOutlookDraftMessageId &&
+        hasReplyDraft,
+    );
     const threadNavigation = getWorkflowThreadNavigation(
       displayThreads,
       selectedEmailId,
@@ -3683,6 +3753,7 @@ export default function App() {
         setCopyFeedback("idle");
         setCaseCopyFeedback("idle");
         setRawCaseCopyFeedback("idle");
+        setOutlookDraftCreationStatus("idle");
         setReplyActionError(null);
       }
     }, [displayThreads, selectedEmailId]);
@@ -4347,6 +4418,8 @@ export default function App() {
                 caseCopyFeedback={caseCopyFeedback}
                 rawCaseCopyFeedback={rawCaseCopyFeedback}
                 regeneratingReply={regeneratingReply}
+                outlookDraftCreationStatus={outlookDraftCreationStatus}
+                canCreateOutlookDraft={canCreateOutlookDraft}
                 replyActionError={replyActionError}
                 macros={BUILT_IN_MACROS}
                 showDebugActions={showDebugUi && currentRep.role === "admin"}
@@ -4373,6 +4446,7 @@ export default function App() {
                 }}
                 onBackToQueue={() => setShowDetailView(false)}
                 onCopyReply={handleCopyReply}
+                onCreateOutlookDraft={handleCreateOutlookDraft}
                 onCopyCaseForReview={handleCopyCaseForReview}
                 onCopyRawCaseJson={handleCopyRawCaseJson}
                 onRegenerateReply={handleRegenerateReply}

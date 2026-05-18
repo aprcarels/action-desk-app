@@ -33,6 +33,7 @@ export function mapRawInboxEmailToEmailItem(rawEmail: RawInboxEmail): EmailItem 
 
   return {
     id: rawEmail.id,
+    providerMessageId: rawEmail.externalId.trim() || rawEmail.id,
     conversationId: rawEmail.threadId?.trim() || undefined,
     locationId: rawEmail.locationId?.trim() || undefined,
     senderName: rawEmail.fromName.trim() || rawEmail.fromEmail.trim() || "Unknown sender",

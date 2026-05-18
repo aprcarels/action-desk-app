@@ -33,6 +33,7 @@ function mapMailboxSourceToEmailSource(
 export function mapMailboxMessageToEmailItem(message: MailboxMessage): EmailItem {
   return {
     id: message.id,
+    providerMessageId: message.providerMessageId?.trim() || undefined,
     conversationId: message.conversationId,
     senderName: message.fromName?.trim() || message.fromEmail.trim() || "Unknown sender",
     senderEmail: message.fromEmail.trim(),
@@ -46,5 +47,6 @@ export function mapMailboxMessageToEmailItem(message: MailboxMessage): EmailItem
     ccRecipients: [...message.ccEmails],
     provider: mapMailboxSourceToInboxProvider(message.source),
     source: mapMailboxSourceToEmailSource(message.source),
+    outlookWebLink: message.webLink?.trim() || undefined,
   };
 }

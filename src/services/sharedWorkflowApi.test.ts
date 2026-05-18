@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  createOutlookReplyDraft,
   createSharedWorkflowBackup,
   getSharedWorkflowErrorMessage,
   loadAuthSession,
@@ -94,6 +95,57 @@ describe("sharedWorkflowApi", () => {
     expect(url.search).toBe("");
     expect(headers["x-action-desk-session-id"]).toBe("session-secure");
     expect(JSON.parse(String(requestInit?.body))).toEqual({ preferences });
+  });
+
+  it("sends Outlook reply draft creation through the local API without session query params", async () => {
+    const storage = new Map<string, string>([
+      ["action-desk.shared-session-id", "session-draft"],
+    ]);
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        draft: {
+          id: "draft-1",
+          webLink: "https://outlook.office.com/mail/deeplink/compose/draft-1",
+        },
+      }),
+    });
+
+    vi.stubGlobal("window", {
+      localStorage: {
+        getItem: (key: string) => storage.get(key) ?? null,
+        setItem: (key: string, value: string) => {
+          storage.set(key, value);
+        },
+        removeItem: (key: string) => {
+          storage.delete(key);
+        },
+      },
+      location: { origin: "http://localhost:5173" },
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const draft = await createOutlookReplyDraft({
+      messageId: "msg-1",
+      replyText: "Reply draft",
+    });
+
+    const [requestUrl, requestInit] = fetchMock.mock.calls[0] ?? [];
+    const url = new URL(String(requestUrl));
+    const headers = requestInit?.headers as Record<string, string>;
+
+    expect(draft).toEqual({
+      id: "draft-1",
+      webLink: "https://outlook.office.com/mail/deeplink/compose/draft-1",
+      subject: undefined,
+    });
+    expect(url.pathname).toBe("/api/outlook/reply-drafts");
+    expect(url.search).toBe("");
+    expect(headers["x-action-desk-session-id"]).toBe("session-draft");
+    expect(JSON.parse(String(requestInit?.body))).toEqual({
+      messageId: "msg-1",
+      replyText: "Reply draft",
+    });
   });
 
   it("clears a stale stored session when session hydration reports expired Microsoft auth", async () => {

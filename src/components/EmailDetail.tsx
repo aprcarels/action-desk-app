@@ -43,6 +43,8 @@ type EmailDetailProps = {
   caseCopyFeedback: "idle" | "success" | "error";
   rawCaseCopyFeedback: "idle" | "success" | "error";
   regeneratingReply: boolean;
+  outlookDraftCreationStatus?: "idle" | "creating" | "success" | "error";
+  canCreateOutlookDraft?: boolean;
   replyActionError: string | null;
   macros: MacroDefinition[];
   showBackButton?: boolean;
@@ -57,6 +59,7 @@ type EmailDetailProps = {
   };
   onBackToQueue?: () => void;
   onCopyReply: () => boolean | Promise<boolean>;
+  onCreateOutlookDraft?: () => void;
   onCopyCaseForReview: () => void;
   onCopyRawCaseJson: () => void;
   onRegenerateReply: () => void;
@@ -133,6 +136,8 @@ export function EmailDetail({
   caseCopyFeedback,
   rawCaseCopyFeedback,
   regeneratingReply,
+  outlookDraftCreationStatus = "idle",
+  canCreateOutlookDraft = false,
   replyActionError,
   macros,
   showBackButton,
@@ -140,6 +145,7 @@ export function EmailDetail({
   navigation,
   onBackToQueue,
   onCopyReply,
+  onCreateOutlookDraft,
   onCopyCaseForReview,
   onCopyRawCaseJson,
   onRegenerateReply,
@@ -539,6 +545,8 @@ export function EmailDetail({
               caseCopyFeedback={caseCopyFeedback}
               rawCaseCopyFeedback={rawCaseCopyFeedback}
               regeneratingReply={regeneratingReply}
+              outlookDraftCreationStatus={outlookDraftCreationStatus}
+              canCreateOutlookDraft={canCreateOutlookDraft}
               replyActionError={replyActionError}
               notesOpen={notesOpen}
               replyHistoryOpen={replyHistoryOpen}
@@ -551,6 +559,7 @@ export function EmailDetail({
               onReplyHistoryOpenChange={setReplyHistoryOpen}
               onOlderMessagesOpenChange={setOlderMessagesOpen}
               onCopyReply={onCopyReply}
+              onCreateOutlookDraft={onCreateOutlookDraft}
               onCopyReplyAndOpenOutlook={copyReplyAndOpenOutlook}
               onCopyCaseForReview={onCopyCaseForReview}
               onCopyRawCaseJson={onCopyRawCaseJson}

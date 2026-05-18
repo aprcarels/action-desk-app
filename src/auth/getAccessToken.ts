@@ -6,8 +6,8 @@ import {
   PublicClientApplication,
 } from "@azure/msal-browser";
 import {
-  createMailReadPopupRequest,
-  createMailReadSilentRequest,
+  createMailReadWritePopupRequest,
+  createMailReadWriteSilentRequest,
   createMsalConfiguration,
   describeMissingMsalConfig,
   getMsalRuntimeConfig,
@@ -16,7 +16,7 @@ import {
 const MISSING_AUTH_CONFIGURATION_MESSAGE =
   "Microsoft mailbox access is not configured. Add VITE_AZURE_CLIENT_ID and VITE_AZURE_TENANT_ID or VITE_AZURE_AUTHORITY.";
 const SIGN_IN_FAILED_MESSAGE =
-  "Microsoft sign-in could not be completed. Please sign in again and allow Mail.Read access.";
+  "Microsoft sign-in could not be completed. Please sign in again and allow Mail.ReadWrite access.";
 const TOKEN_ACQUISITION_FAILED_MESSAGE =
   "Microsoft mailbox access could not be authorized right now. Please try again.";
 const SIGN_IN_ALREADY_IN_PROGRESS_MESSAGE =
@@ -116,7 +116,7 @@ async function ensureSignedIn(client: PublicClientApplication) {
   }
 
   if (!loginPopupPromise) {
-    const popupRequest = createMailReadPopupRequest();
+    const popupRequest = createMailReadWritePopupRequest();
     console.info("[auth] starting loginPopup", {
       redirectUri: popupRequest.redirectUri,
       origin: typeof window !== "undefined" ? window.location.origin : undefined,
@@ -177,7 +177,7 @@ async function getAccessTokenInternal(options?: {
 
   try {
     const tokenResponse = await client.acquireTokenSilent(
-      createMailReadSilentRequest(account),
+      createMailReadWriteSilentRequest(account),
     );
 
     client.setActiveAccount(tokenResponse.account ?? account);
@@ -199,7 +199,7 @@ async function getAccessTokenInternal(options?: {
 
     try {
       const tokenResponse = await client.acquireTokenSilent(
-        createMailReadSilentRequest(popupAccount),
+        createMailReadWriteSilentRequest(popupAccount),
       );
 
       client.setActiveAccount(tokenResponse.account ?? popupAccount);

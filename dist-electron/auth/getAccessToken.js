@@ -4,7 +4,7 @@ exports.getAccessToken = getAccessToken;
 const msal_browser_1 = require("@azure/msal-browser");
 const msalConfig_1 = require("./msalConfig");
 const MISSING_AUTH_CONFIGURATION_MESSAGE = "Microsoft mailbox access is not configured. Add VITE_AZURE_CLIENT_ID and VITE_AZURE_TENANT_ID or VITE_AZURE_AUTHORITY.";
-const SIGN_IN_FAILED_MESSAGE = "Microsoft sign-in could not be completed. Please sign in again and allow Mail.Read access.";
+const SIGN_IN_FAILED_MESSAGE = "Microsoft sign-in could not be completed. Please sign in again and allow Mail.ReadWrite access.";
 const TOKEN_ACQUISITION_FAILED_MESSAGE = "Microsoft mailbox access could not be authorized right now. Please try again.";
 const SIGN_IN_ALREADY_IN_PROGRESS_MESSAGE = "Microsoft sign-in is already in progress. Please finish the open sign-in popup and try again if needed.";
 const SIGN_IN_REQUIRED_MESSAGE = "Sign in to Microsoft to load your live inbox.";
@@ -70,7 +70,7 @@ async function ensureSignedIn(client) {
         return existingAccount;
     }
     if (!loginPopupPromise) {
-        const popupRequest = (0, msalConfig_1.createMailReadPopupRequest)();
+        const popupRequest = (0, msalConfig_1.createMailReadWritePopupRequest)();
         console.info("[auth] starting loginPopup", {
             redirectUri: popupRequest.redirectUri,
             origin: typeof window !== "undefined" ? window.location.origin : undefined,
@@ -116,7 +116,7 @@ async function getAccessTokenInternal(options) {
     const account = existingAccount ?? (await ensureSignedIn(client));
     client.setActiveAccount(account);
     try {
-        const tokenResponse = await client.acquireTokenSilent((0, msalConfig_1.createMailReadSilentRequest)(account));
+        const tokenResponse = await client.acquireTokenSilent((0, msalConfig_1.createMailReadWriteSilentRequest)(account));
         client.setActiveAccount(tokenResponse.account ?? account);
         return tokenResponse.accessToken;
     }
@@ -132,7 +132,7 @@ async function getAccessTokenInternal(options) {
         }
         const popupAccount = await ensureSignedIn(client);
         try {
-            const tokenResponse = await client.acquireTokenSilent((0, msalConfig_1.createMailReadSilentRequest)(popupAccount));
+            const tokenResponse = await client.acquireTokenSilent((0, msalConfig_1.createMailReadWriteSilentRequest)(popupAccount));
             client.setActiveAccount(tokenResponse.account ?? popupAccount);
             return tokenResponse.accessToken;
         }

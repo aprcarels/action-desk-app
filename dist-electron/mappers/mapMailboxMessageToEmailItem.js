@@ -26,6 +26,7 @@ function mapMailboxSourceToEmailSource(source) {
 function mapMailboxMessageToEmailItem(message) {
     return {
         id: message.id,
+        providerMessageId: message.providerMessageId?.trim() || undefined,
         conversationId: message.conversationId,
         senderName: message.fromName?.trim() || message.fromEmail.trim() || "Unknown sender",
         senderEmail: message.fromEmail.trim(),
@@ -39,5 +40,6 @@ function mapMailboxMessageToEmailItem(message) {
         ccRecipients: [...message.ccEmails],
         provider: mapMailboxSourceToInboxProvider(message.source),
         source: mapMailboxSourceToEmailSource(message.source),
+        outlookWebLink: message.webLink?.trim() || undefined,
     };
 }

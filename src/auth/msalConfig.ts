@@ -6,7 +6,7 @@ import type {
 } from "@azure/msal-browser";
 import { getEnv } from "../utils/env";
 
-export const graphMailReadScopes = ["Mail.Read"];
+export const graphMailReadWriteScopes = ["Mail.ReadWrite"];
 const MSAL_CALLBACK_PATH = "/auth/popup-callback.html";
 
 type MsalRuntimeConfig = {
@@ -124,7 +124,7 @@ export function createMsalConfiguration(config: MsalRuntimeConfig): Configuratio
   };
 }
 
-export function createMailReadPopupRequest(): PopupRequest {
+export function createMailReadWritePopupRequest(): PopupRequest {
   const redirectUri = resolveAuthCallbackRedirectUri(getMsalRuntimeConfig());
 
   if (getEnv("DEV") === "true") {
@@ -132,15 +132,15 @@ export function createMailReadPopupRequest(): PopupRequest {
   }
 
   return {
-    scopes: graphMailReadScopes,
+    scopes: graphMailReadWriteScopes,
     prompt: "select_account",
     redirectUri,
   };
 }
 
-export function createMailReadSilentRequest(account: AccountInfo): SilentRequest {
+export function createMailReadWriteSilentRequest(account: AccountInfo): SilentRequest {
   return {
-    scopes: graphMailReadScopes,
+    scopes: graphMailReadWriteScopes,
     account,
   };
 }

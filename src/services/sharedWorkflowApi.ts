@@ -46,6 +46,11 @@ export type SharedAuthSessionResponse = AuthSession & {
   staleSessionCleared?: boolean;
   authMessage?: string;
 };
+export type OutlookReplyDraft = {
+  id: string;
+  webLink?: string;
+  subject?: string;
+};
 
 let sharedApiOrigin =
   typeof window !== "undefined"
@@ -434,6 +439,39 @@ export async function createSharedWorkflowBackup(): Promise<{ backupPath: string
   return requestJson("/api/admin/backup", {
     method: "POST",
   });
+}
+
+export async function createOutlookReplyDraft(input: {
+  messageId: string;
+  replyText: string;
+}): Promise<OutlookReplyDraft> {
+  const response = await requestJson<{
+    draft?: Partial<OutlookReplyDraft>;
+    id?: string;
+    webLink?: string;
+    subject?: string;
+  }>("/api/outlook/reply-drafts", {
+    method: "POST",
+    body: input,
+  });
+  const draft = response.draft ?? response;
+  const draftId = typeof draft.id === "string" ? draft.id.trim() : "";
+
+  if (!draftId) {
+    throw createSharedWorkflowError({
+      code: "outlook_reply_draft_invalid_response",
+      message: "Outlook created a draft but did not return a draft id.",
+      retryable: true,
+      context: "/api/outlook/reply-drafts",
+      details: response,
+    });
+  }
+
+  return {
+    id: draftId,
+    webLink: typeof draft.webLink === "string" ? draft.webLink.trim() || undefined : undefined,
+    subject: typeof draft.subject === "string" ? draft.subject.trim() || undefined : undefined,
+  };
 }
 
 export async function loadSharedUsers(): Promise<{

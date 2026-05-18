@@ -908,6 +908,30 @@ function getGraphPayloadErrorMessage(payload, fallback) {
   return fallback;
 }
 
+function getGraphReplyDraftPayload(body) {
+  const messageId = normalizeText(
+    body?.messageId ??
+      body?.providerMessageId ??
+      body?.externalId ??
+      body?.id,
+  );
+  const replyText =
+    typeof body?.replyText === "string" ? body.replyText.trim() : "";
+
+  return {
+    messageId,
+    replyText,
+  };
+}
+
+function normalizeGraphDraftPayload(payload) {
+  return {
+    id: normalizeText(payload?.id),
+    webLink: normalizeText(payload?.webLink) || undefined,
+    subject: normalizeText(payload?.subject) || undefined,
+  };
+}
+
 function safeCompareText(left, right) {
   const leftBuffer = Buffer.from(String(left || ""));
   const rightBuffer = Buffer.from(String(right || ""));
@@ -1432,6 +1456,107 @@ async function deleteOutlookSubscription(req, res, requestUrl, context) {
   return true;
 }
 
+async function createOutlookReplyDraft(req, res, requestUrl, context) {
+  const body = await readRequestBody(req);
+  const { messageId, replyText } = getGraphReplyDraftPayload(body);
+
+  if (!messageId) {
+    sendApiError(req, res, 400, {
+      code: "missing_outlook_message_id",
+      message: "An Outlook message id is required to create a reply draft.",
+      retryable: false,
+      context: requestUrl.pathname,
+    });
+    return true;
+  }
+
+  if (!replyText) {
+    sendApiError(req, res, 400, {
+      code: "missing_reply_text",
+      message: "Reply text is required to create an Outlook draft.",
+      retryable: false,
+      context: requestUrl.pathname,
+    });
+    return true;
+  }
+
+  const { authorization, sessionId } = await getGraphAuthorizationForRequest(
+    req,
+    requestUrl,
+    body,
+    context.authProvider,
+    context.logger,
+  );
+  const response = await fetch(
+    `${GRAPH_BASE_URL}/me/messages/${encodeURIComponent(messageId)}/createReply`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: authorization,
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        comment: replyText,
+      }),
+    },
+  );
+  const graphPayload = await readGraphResponsePayload(response);
+
+  if (!response.ok) {
+    if (response.status === 401) {
+      throw createHttpError(
+        401,
+        "stale_microsoft_session",
+        EXPIRED_MICROSOFT_SESSION_MESSAGE,
+      );
+    }
+
+    if (response.status === 403) {
+      throw createHttpError(
+        403,
+        "outlook_draft_permission_missing",
+        getGraphPayloadErrorMessage(
+          graphPayload,
+          "Outlook draft creation is not authorized. Sign in again and approve Mail.ReadWrite access.",
+        ),
+      );
+    }
+
+    throw createHttpError(
+      502,
+      "outlook_reply_draft_create_failed",
+      getGraphPayloadErrorMessage(
+        graphPayload,
+        `Outlook reply draft creation failed with status ${response.status}.`,
+      ),
+    );
+  }
+
+  const draft = normalizeGraphDraftPayload(graphPayload);
+
+  if (!draft.id) {
+    throw createHttpError(
+      502,
+      "outlook_reply_draft_create_failed",
+      "Outlook created a reply draft but did not return a draft id.",
+    );
+  }
+
+  context.logger?.info("outlook-draft", "outlook-reply-draft created", {
+    sessionId: String(sessionId || "") || undefined,
+    sourceMessageId: messageId,
+    draftId: draft.id,
+    hasWebLink: Boolean(draft.webLink),
+  });
+
+  sendJson(req, res, 200, {
+    draft,
+    webLink: draft.webLink,
+  });
+  return true;
+}
+
 function getOutlookSubscriptionStatus(req, res, context) {
   const config = getOutlookWebhookConfig();
 
@@ -1463,6 +1588,10 @@ async function handleOutlookRoute(req, res, requestUrl, context) {
       context,
       requestUrl.pathname.endsWith("/lifecycle") ? "lifecycle" : "webhook",
     );
+  }
+
+  if (req.method === "POST" && requestUrl.pathname === "/api/outlook/reply-drafts") {
+    return createOutlookReplyDraft(req, res, requestUrl, context);
   }
 
   if (req.method === "POST" && requestUrl.pathname === "/api/outlook/subscriptions/create") {

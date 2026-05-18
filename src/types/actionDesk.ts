@@ -380,6 +380,7 @@ export type PilotQueueItemState = {
 
 export type EmailItem = {
   id: string;
+  providerMessageId?: string;
   conversationId?: string;
   workflowThreadId?: string;
   locationId?: string;

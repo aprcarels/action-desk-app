@@ -12,12 +12,12 @@ const {
 
 require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
 
-const GRAPH_MAIL_READ_SCOPES = [
+const GRAPH_MAIL_SCOPES = [
   "openid",
   "profile",
   "email",
   "offline_access",
-  "Mail.Read",
+  "Mail.ReadWrite",
 ];
 const AUTH_TIMEOUT_MS = 120000;
 
@@ -183,7 +183,7 @@ async function redeemAuthCode(options) {
 
   return app.acquireTokenByCode({
     code: options.code,
-    scopes: GRAPH_MAIL_READ_SCOPES,
+    scopes: GRAPH_MAIL_SCOPES,
     redirectUri: options.redirectUri,
     codeVerifier: options.codeVerifier,
   });
@@ -202,7 +202,7 @@ async function acquireInteractiveResult(logger) {
   });
 
   const authCodeUrl = await app.getAuthCodeUrl({
-    scopes: GRAPH_MAIL_READ_SCOPES,
+    scopes: GRAPH_MAIL_SCOPES,
     redirectUri: listener.redirectUri,
     codeChallenge: pkceCodes.challenge,
     codeChallengeMethod: "S256",
@@ -330,7 +330,7 @@ async function getAccessTokenForSession(sessionId, options = {}, logger) {
   try {
     const result = await app.acquireTokenSilent({
       account: context.account,
-      scopes: GRAPH_MAIL_READ_SCOPES,
+      scopes: GRAPH_MAIL_SCOPES,
     });
 
     if (!result?.accessToken) {

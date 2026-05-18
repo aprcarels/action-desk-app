@@ -18,6 +18,7 @@ describe("mapRawInboxEmailToEmailItem", () => {
     expect(item.previewText).toBe("Carrier delay preview");
     expect(item.body).toBe("Carrier delay preview");
     expect(item.senderName).toBe("customer@example.com");
+    expect(item.providerMessageId).toBe("email-1");
     expect(item.source).toBe("outlook_graph");
   });
 
