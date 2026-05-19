@@ -1,13 +1,20 @@
 import http from "node:http";
 import { createRequire } from "node:module";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 const require = createRequire(import.meta.url);
-const { createBackendApiClient } = require("./backendApiClient.cjs") as {
+const {
+  buildMissingApiUrlMessage,
+  createBackendApiClient,
+  getActionDeskApiUrl,
+} = require("./backendApiClient.cjs") as {
+  buildMissingApiUrlMessage: (runtimeConfigPath?: string) => string;
   createBackendApiClient: (options: {
-    baseUrl: string;
-    logger: Record<string, (...args: unknown[]) => void>;
+    baseUrl?: string;
+    logger?: Record<string, (...args: unknown[]) => void>;
+    runtimeConfigPath?: string;
   }) => {
+    baseUrl: string;
     requestJson: (
       pathname: string,
       options?: {
@@ -17,7 +24,25 @@ const { createBackendApiClient } = require("./backendApiClient.cjs") as {
       },
     ) => Promise<unknown>;
   };
+  getActionDeskApiUrl: (options?: { runtimeConfigPath?: string }) => string;
 };
+
+const originalActionDeskApiUrl = process.env.ACTION_DESK_API_URL;
+const originalViteActionDeskApiUrl = process.env.VITE_ACTION_DESK_API_URL;
+
+function resetApiUrlEnv() {
+  if (originalActionDeskApiUrl === undefined) {
+    delete process.env.ACTION_DESK_API_URL;
+  } else {
+    process.env.ACTION_DESK_API_URL = originalActionDeskApiUrl;
+  }
+
+  if (originalViteActionDeskApiUrl === undefined) {
+    delete process.env.VITE_ACTION_DESK_API_URL;
+  } else {
+    process.env.VITE_ACTION_DESK_API_URL = originalViteActionDeskApiUrl;
+  }
+}
 
 type CapturedRequest = {
   body: string;
@@ -81,6 +106,32 @@ async function closeServer(server: http.Server) {
 }
 
 describe("backendApiClient", () => {
+  afterEach(() => {
+    resetApiUrlEnv();
+  });
+
+  it("uses VITE_ACTION_DESK_API_URL when ACTION_DESK_API_URL is not set", () => {
+    delete process.env.ACTION_DESK_API_URL;
+    process.env.VITE_ACTION_DESK_API_URL = "http://localhost:3960/";
+
+    expect(getActionDeskApiUrl()).toBe("http://localhost:3960");
+  });
+
+  it("explains where admins should create runtime config when API URL is missing", () => {
+    delete process.env.ACTION_DESK_API_URL;
+    delete process.env.VITE_ACTION_DESK_API_URL;
+
+    expect(() =>
+      getActionDeskApiUrl({
+        runtimeConfigPath: "C:\\Users\\pilot\\AppData\\Roaming\\Action Desk\\config.json",
+      }),
+    ).toThrow(
+      buildMissingApiUrlMessage(
+        "C:\\Users\\pilot\\AppData\\Roaming\\Action Desk\\config.json",
+      ),
+    );
+  });
+
   it("sends session ids only in the session header", async () => {
     const { capturedRequest, origin, server } = await startCaptureServer();
     const client = createBackendApiClient({

@@ -1,10 +1,14 @@
 import { getEnv } from "../utils/env";
 
 function getApiUrl() {
-  const apiUrl = (getEnv("ACTION_DESK_API_URL") ?? "").replace(/\/+$/, "");
+  const apiUrl = (
+    getEnv("ACTION_DESK_API_URL") ??
+    getEnv("VITE_ACTION_DESK_API_URL") ??
+    ""
+  ).replace(/\/+$/, "");
 
   if (!apiUrl) {
-    throw new Error("ACTION_DESK_API_URL is not configured.");
+    throw new Error("ACTION_DESK_API_URL or VITE_ACTION_DESK_API_URL is not configured.");
   }
 
   return apiUrl;

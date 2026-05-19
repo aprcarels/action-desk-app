@@ -33,3 +33,4 @@ temp-morning-briefing/
 # Ignore build output
 release/
 dist-electron/
+build/installer-api-url.generated.nsh

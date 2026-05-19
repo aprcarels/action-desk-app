@@ -13,6 +13,7 @@ declare global {
         userDataPath: string;
         recommendedRepositoryBackend: "sqlite" | "api";
         actionDeskApiUrl?: string | null;
+        runtimeConfigPath?: string | null;
         inboxSource?: string;
         appOrigin?: string | null;
         apiOrigin?: string | null;

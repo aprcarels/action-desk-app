@@ -1,55 +1,8 @@
 const path = require("node:path");
-const fs = require("node:fs");
-const dotenv = require("dotenv");
-
-function addEnvCandidate(candidatePaths, envPath) {
-  if (!envPath) {
-    return;
-  }
-
-  const resolvedPath = path.resolve(envPath);
-
-  if (!candidatePaths.includes(resolvedPath)) {
-    candidatePaths.push(resolvedPath);
-  }
-}
-
-function loadActionDeskEnv() {
-  const candidatePaths = [];
-
-  addEnvCandidate(candidatePaths, process.env.ACTION_DESK_ENV_PATH);
-  addEnvCandidate(candidatePaths, path.resolve(__dirname, "..", ".env"));
-  addEnvCandidate(candidatePaths, path.resolve(process.cwd(), ".env"));
-  addEnvCandidate(candidatePaths, path.resolve(process.cwd(), "..", ".env"));
-  addEnvCandidate(candidatePaths, path.resolve(process.cwd(), "..", "..", ".env"));
-
-  if (process.resourcesPath) {
-    addEnvCandidate(candidatePaths, path.join(process.resourcesPath, ".env"));
-    addEnvCandidate(candidatePaths, path.join(process.resourcesPath, "app.asar", ".env"));
-  }
-
-  addEnvCandidate(candidatePaths, path.join(path.dirname(process.execPath), ".env"));
-  addEnvCandidate(candidatePaths, path.resolve(__dirname, "..", "..", "..", "..", "..", ".env"));
-
-  for (const envPath of candidatePaths) {
-    if (fs.existsSync(envPath)) {
-      const result = dotenv.config({ path: envPath, override: true });
-      const loaded = !result.error;
-
-      console.log("[Action Desk] Loaded .env from:", envPath);
-      return {
-        envPath,
-        loaded,
-      };
-    }
-  }
-
-  console.warn("[Action Desk] No .env file found; using process environment only.");
-  return {
-    envPath: null,
-    loaded: false,
-  };
-}
+const {
+  loadActionDeskEnv,
+  loadActionDeskRuntimeConfig,
+} = require("./utils/env.cjs");
 
 const envLoadResult = loadActionDeskEnv();
 
@@ -98,6 +51,7 @@ let desktopApiOrigin = null;
 let desktopLogFilePath = null;
 let mainWindowRef = null;
 let backendApiClient = null;
+let runtimeConfigLoadResult = null;
 
 function getQueueManager() {
   if (!queueManager) {
@@ -117,6 +71,7 @@ function getDesktopRuntimeInfo() {
     userDataPath,
     recommendedRepositoryBackend: "api",
     actionDeskApiUrl: backendApiClient?.baseUrl ?? null,
+    runtimeConfigPath: runtimeConfigLoadResult?.configPath ?? null,
     inboxSource: process.env.VITE_INBOX_SOURCE || "dev",
     appOrigin: desktopAppOrigin,
     apiOrigin: desktopApiOrigin,
@@ -270,10 +225,18 @@ function createWindow() {
 
 app.whenReady().then(async () => {
   try {
-    const resolvedBackendApiUrl = getActionDeskApiUrl();
+    const userDataPath = app.getPath("userData");
+    runtimeConfigLoadResult = loadActionDeskRuntimeConfig({ userDataPath });
+    const resolvedBackendApiUrl = getActionDeskApiUrl({
+      runtimeConfigPath: runtimeConfigLoadResult.configPath,
+    });
 
     console.log("[Action Desk] Resolved backend API URL:", resolvedBackendApiUrl);
     console.log("[Action Desk] Backend API env source:", envLoadResult.envPath || "process environment");
+    console.log(
+      "[Action Desk] Runtime config source:",
+      runtimeConfigLoadResult.loaded ? runtimeConfigLoadResult.configPath : "not found",
+    );
 
     backendApiClient = createBackendApiClient({
       baseUrl: resolvedBackendApiUrl,
@@ -285,7 +248,7 @@ app.whenReady().then(async () => {
 
     desktopAppServer = await startDesktopAppServer({
       distDir: path.join(__dirname, "../dist"),
-      databasePath: path.join(app.getPath("userData"), "action-desk-shared.sqlite"),
+      databasePath: path.join(userDataPath, "action-desk-shared.sqlite"),
       backendApi: backendApiClient,
       authProvider: {
         aliasSessionContext,
@@ -304,6 +267,9 @@ app.whenReady().then(async () => {
       actionDeskApiUrl: backendApiClient.baseUrl,
       envPath: envLoadResult.envPath || undefined,
       envLoaded: envLoadResult.loaded,
+      runtimeConfigPath: runtimeConfigLoadResult.configPath,
+      runtimeConfigLoaded: runtimeConfigLoadResult.loaded,
+      runtimeConfigSourceKey: runtimeConfigLoadResult.sourceKey || undefined,
     });
 
     if (!isDev) {

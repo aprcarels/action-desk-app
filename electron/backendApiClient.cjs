@@ -25,22 +25,44 @@ const SECRET_QUERY_KEYS = new Set([
   "token",
 ]);
 
-function normalizeApiUrl(value) {
+function buildMissingApiUrlMessage(runtimeConfigPath) {
+  const configInstruction = runtimeConfigPath
+    ? `Create ${runtimeConfigPath} with this JSON:`
+    : "Create the Action Desk runtime config file with this JSON:";
+
+  return [
+    "Action Desk API URL is not configured.",
+    configInstruction,
+    "{",
+    '  "ACTION_DESK_API_URL": "http://localhost:3960"',
+    "}",
+    "VITE_ACTION_DESK_API_URL is also accepted. The installer intentionally does not include .env.",
+  ].join("\n");
+}
+
+function normalizeApiUrl(value, options = {}) {
   const normalized = String(value || "").trim().replace(/\/+$/, "");
 
   if (!normalized) {
-    throw new Error("ACTION_DESK_API_URL is not configured.");
+    throw new Error(buildMissingApiUrlMessage(options.runtimeConfigPath));
   }
 
   try {
     return new URL(normalized).origin;
   } catch {
-    throw new Error("ACTION_DESK_API_URL must be a valid absolute URL.");
+    throw new Error("Action Desk API URL must be a valid absolute URL.");
   }
 }
 
-function getActionDeskApiUrl() {
-  return normalizeApiUrl(process.env.ACTION_DESK_API_URL);
+function getConfiguredApiUrlFromEnv() {
+  return (
+    String(process.env.ACTION_DESK_API_URL || "").trim() ||
+    String(process.env.VITE_ACTION_DESK_API_URL || "").trim()
+  );
+}
+
+function getActionDeskApiUrl(options = {}) {
+  return normalizeApiUrl(getConfiguredApiUrlFromEnv(), options);
 }
 
 function getLogger(options = {}) {
@@ -279,7 +301,12 @@ async function requestWithRetry(url, options) {
 }
 
 function createBackendApiClient(options = {}) {
-  const baseUrl = normalizeApiUrl(options.baseUrl ?? process.env.ACTION_DESK_API_URL);
+  const baseUrl = normalizeApiUrl(
+    options.baseUrl ?? getConfiguredApiUrlFromEnv(),
+    {
+      runtimeConfigPath: options.runtimeConfigPath,
+    },
+  );
   const timeoutMs = options.timeoutMs ?? DEFAULT_BACKEND_TIMEOUT_MS;
   let logger = getLogger(options);
 
@@ -391,6 +418,7 @@ function createBackendApiClient(options = {}) {
 }
 
 module.exports = {
+  buildMissingApiUrlMessage,
   createBackendApiClient,
   createBackendApiError,
   getActionDeskApiUrl,

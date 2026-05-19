@@ -820,6 +820,7 @@ export default function App() {
     userDataPath: string;
     recommendedRepositoryBackend: "sqlite" | "api";
     actionDeskApiUrl?: string | null;
+    runtimeConfigPath?: string | null;
     inboxSource?: string;
     appOrigin?: string | null;
     apiOrigin?: string | null;
@@ -4293,6 +4294,9 @@ export default function App() {
               Inbox source: {desktopRuntimeInfo.inboxSource}.
               {desktopRuntimeInfo.logFilePath
                 ? ` Log file: ${desktopRuntimeInfo.logFilePath}.`
+                : ""}
+              {desktopRuntimeInfo.runtimeConfigPath
+                ? ` Runtime config: ${desktopRuntimeInfo.runtimeConfigPath}.`
                 : ""}
             </div>
           )}
