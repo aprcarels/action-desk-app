@@ -20,7 +20,7 @@
     "ensure:test-native": "node scripts/ensure-node-better-sqlite3.cjs",
     "lint": "eslint .",
     "pack:desktop": "npm run build:all && electron-builder --dir",
-    "package:win": "npm run build:all && node scripts/write-installer-api-url.cjs && electron-builder --win nsis",
+    "package:win": "node scripts/write-installer-api-url.cjs && npm run build && npm run desktop:prep && electron-builder --win nsis",
     "pretest": "npm run ensure:test-native",
     "test": "vitest run",
     "preview": "vite preview"

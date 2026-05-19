@@ -226,7 +226,10 @@ function createWindow() {
 app.whenReady().then(async () => {
   try {
     const userDataPath = app.getPath("userData");
-    runtimeConfigLoadResult = loadActionDeskRuntimeConfig({ userDataPath });
+    runtimeConfigLoadResult = loadActionDeskRuntimeConfig({
+      appDataPath: app.getPath("appData"),
+      userDataPath,
+    });
     const resolvedBackendApiUrl = getActionDeskApiUrl({
       runtimeConfigPath: runtimeConfigLoadResult.configPath,
     });
@@ -270,6 +273,7 @@ app.whenReady().then(async () => {
       runtimeConfigPath: runtimeConfigLoadResult.configPath,
       runtimeConfigLoaded: runtimeConfigLoadResult.loaded,
       runtimeConfigSourceKey: runtimeConfigLoadResult.sourceKey || undefined,
+      runtimeConfigSourceKeys: runtimeConfigLoadResult.sourceKeys,
     });
 
     if (!isDev) {

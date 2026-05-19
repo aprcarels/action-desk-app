@@ -58,15 +58,17 @@ npm run lint
 
 ## Desktop Install Runtime Config
 
-Packaged desktop installs do not include `.env`. The Windows installer creates `%APPDATA%\Action Desk\config.json` on first install with the default embedded-server API URL:
+Packaged desktop installs do not include `.env`. The Windows installer creates `%APPDATA%\action-desk-app\config.json` on first install with non-secret runtime values:
 
 ```json
 {
-  "ACTION_DESK_API_URL": "http://localhost:3960"
+  "ACTION_DESK_API_URL": "http://localhost:3960",
+  "VITE_AZURE_CLIENT_ID": "<client-id>",
+  "VITE_AZURE_TENANT_ID": "<tenant-id>"
 }
 ```
 
-Existing `config.json` files are preserved during reinstall or upgrade. To package an installer for a hosted backend, set `ACTION_DESK_INSTALLER_API_URL` before running `npm run package:win`.
+Existing `config.json` files are preserved during reinstall or upgrade. To package an installer, set `ACTION_DESK_INSTALLER_API_URL`, `ACTION_DESK_INSTALLER_AZURE_CLIENT_ID`, and `ACTION_DESK_INSTALLER_AZURE_TENANT_ID` before running `npm run package:win`.
 
 See [docs/windows-pilot-build.md](docs/windows-pilot-build.md) for the full pilot install notes.
 

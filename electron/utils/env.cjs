@@ -3,9 +3,15 @@ const path = require("node:path");
 const dotenv = require("dotenv");
 
 const RUNTIME_CONFIG_FILE_NAME = "config.json";
+const RUNTIME_CONFIG_DIRECTORY_NAME = "action-desk-app";
 const API_URL_CONFIG_KEYS = [
   "ACTION_DESK_API_URL",
   "VITE_ACTION_DESK_API_URL",
+];
+const RUNTIME_ENV_CONFIG_KEYS = [
+  "VITE_AZURE_CLIENT_ID",
+  "VITE_AZURE_TENANT_ID",
+  "VITE_AZURE_AUTHORITY",
 ];
 
 function addEnvCandidate(candidatePaths, envPath) {
@@ -58,12 +64,24 @@ function loadActionDeskEnv(options = {}) {
   };
 }
 
-function getRuntimeConfigPath(userDataPath) {
-  if (!userDataPath) {
-    throw new Error("Action Desk user data path is required to resolve runtime config.");
+function getRuntimeConfigPath(input) {
+  if (typeof input === "string") {
+    return path.join(path.dirname(input), RUNTIME_CONFIG_DIRECTORY_NAME, RUNTIME_CONFIG_FILE_NAME);
   }
 
-  return path.join(userDataPath, RUNTIME_CONFIG_FILE_NAME);
+  if (input?.appDataPath) {
+    return path.join(input.appDataPath, RUNTIME_CONFIG_DIRECTORY_NAME, RUNTIME_CONFIG_FILE_NAME);
+  }
+
+  if (input?.userDataPath) {
+    return path.join(
+      path.dirname(input.userDataPath),
+      RUNTIME_CONFIG_DIRECTORY_NAME,
+      RUNTIME_CONFIG_FILE_NAME,
+    );
+  }
+
+  throw new Error("Action Desk app data path is required to resolve runtime config.");
 }
 
 function normalizeConfigString(value) {
@@ -103,9 +121,14 @@ function applyRuntimeConfig(config, options = {}) {
 
   const configuredApiUrl = getConfiguredApiUrl(config);
   const appliedKeys = [];
+  const sourceKeys = [];
   const hasApiUrlEnv =
     Boolean(normalizeConfigString(process.env.ACTION_DESK_API_URL)) ||
     Boolean(normalizeConfigString(process.env.VITE_ACTION_DESK_API_URL));
+
+  if (configuredApiUrl) {
+    sourceKeys.push(configuredApiUrl.key);
+  }
 
   if (
     configuredApiUrl &&
@@ -115,9 +138,25 @@ function applyRuntimeConfig(config, options = {}) {
     appliedKeys.push("ACTION_DESK_API_URL");
   }
 
+  for (const key of RUNTIME_ENV_CONFIG_KEYS) {
+    const value = normalizeConfigString(config[key]);
+
+    if (!value) {
+      continue;
+    }
+
+    sourceKeys.push(key);
+
+    if (options.override === true || !normalizeConfigString(process.env[key])) {
+      process.env[key] = value;
+      appliedKeys.push(key);
+    }
+  }
+
   return {
     appliedKeys,
     sourceKey: configuredApiUrl?.key ?? null,
+    sourceKeys,
   };
 }
 
@@ -125,7 +164,7 @@ function loadActionDeskRuntimeConfig(options = {}) {
   const configPath =
     options.configPath ??
     process.env.ACTION_DESK_CONFIG_PATH ??
-    getRuntimeConfigPath(options.userDataPath);
+    getRuntimeConfigPath(options);
 
   if (!fs.existsSync(configPath)) {
     return {
@@ -133,6 +172,7 @@ function loadActionDeskRuntimeConfig(options = {}) {
       loaded: false,
       appliedKeys: [],
       sourceKey: null,
+      sourceKeys: [],
     };
   }
 
@@ -152,6 +192,8 @@ function loadActionDeskRuntimeConfig(options = {}) {
 module.exports = {
   API_URL_CONFIG_KEYS,
   RUNTIME_CONFIG_FILE_NAME,
+  RUNTIME_CONFIG_DIRECTORY_NAME,
+  RUNTIME_ENV_CONFIG_KEYS,
   applyRuntimeConfig,
   getConfiguredApiUrl,
   getRuntimeConfigPath,

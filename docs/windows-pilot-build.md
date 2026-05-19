@@ -16,22 +16,33 @@ npm run pack:desktop
 
 Build the Windows installer:
 
-```bash
+```powershell
+$env:ACTION_DESK_INSTALLER_API_URL="http://localhost:3960"
+$env:ACTION_DESK_INSTALLER_AZURE_CLIENT_ID="<client-id>"
+$env:ACTION_DESK_INSTALLER_AZURE_TENANT_ID="<tenant-id>"
 npm run package:win
 ```
 
-The installer writes `%APPDATA%\Action Desk\config.json` on first install with the packaged desktop default API URL:
+`ACTION_DESK_INSTALLER_API_URL`, `ACTION_DESK_INSTALLER_AZURE_CLIENT_ID`, and `ACTION_DESK_INSTALLER_AZURE_TENANT_ID` are required. `npm run package:win` fails fast if any are missing so the installer cannot be built without the non-secret runtime values required for Microsoft sign-in and the backend API.
+
+The installer runs `desktop:prep` before Electron Builder so `better-sqlite3` is rebuilt for Electron after any test run that rebuilt it for Node/Vitest.
+
+The installer writes `%APPDATA%\action-desk-app\config.json` on first install with the packaged desktop runtime values:
 
 ```json
 {
-  "ACTION_DESK_API_URL": "http://localhost:3960"
+  "ACTION_DESK_API_URL": "http://localhost:3960",
+  "VITE_AZURE_CLIENT_ID": "<client-id>",
+  "VITE_AZURE_TENANT_ID": "<tenant-id>"
 }
 ```
 
-To package an installer that points installed clients at a hosted backend instead, set `ACTION_DESK_INSTALLER_API_URL` before running the package command:
+To package an installer that points installed clients at a hosted backend instead, change `ACTION_DESK_INSTALLER_API_URL` before running the package command:
 
 ```powershell
 $env:ACTION_DESK_INSTALLER_API_URL="https://api.actiondesk.example.com"
+$env:ACTION_DESK_INSTALLER_AZURE_CLIENT_ID="<client-id>"
+$env:ACTION_DESK_INSTALLER_AZURE_TENANT_ID="<tenant-id>"
 npm run package:win
 ```
 
@@ -72,14 +83,16 @@ https://localhost:5173/auth/popup-callback.html
 The installer does not bundle `.env` files. On first install, it automatically creates this runtime config file for the installing Windows user:
 
 ```text
-%APPDATA%\Action Desk\config.json
+%APPDATA%\action-desk-app\config.json
 ```
 
 Default contents:
 
 ```json
 {
-  "ACTION_DESK_API_URL": "http://localhost:3960"
+  "ACTION_DESK_API_URL": "http://localhost:3960",
+  "VITE_AZURE_CLIENT_ID": "<client-id>",
+  "VITE_AZURE_TENANT_ID": "<tenant-id>"
 }
 ```
 
@@ -88,9 +101,17 @@ The installer preserves an existing `config.json`; it will not overwrite an admi
 For the current Windows user, `%APPDATA%\Action Desk\config.json` normally expands to:
 
 ```text
-C:\Users\<user>\AppData\Roaming\Action Desk\config.json
+C:\Users\<user>\AppData\Roaming\action-desk-app\config.json
 ```
 
-If the API URL is missing, the app exits on startup with an admin-facing error that includes the exact config path to create. Local development can still use `.env`; the runtime config only fills the API URL when no environment or `.env` value is already present.
+If the API URL is missing, the app exits on startup with an admin-facing error that includes the exact config path to create. If the Azure client or tenant IDs are missing, Microsoft sign-in cannot start. Local development can still use `.env`; the runtime config only fills values when no environment or `.env` value is already present.
+
+Safe values to put in installer/runtime config:
+
+- `ACTION_DESK_API_URL`
+- `VITE_AZURE_CLIENT_ID`
+- `VITE_AZURE_TENANT_ID`
+
+Do not put client secrets, database passwords, API keys, or webhook secrets in installer/runtime config.
 
 The packaging config in `package.json` must continue to exclude `.env` and `.env.*` from installer contents.

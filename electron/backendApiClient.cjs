@@ -34,7 +34,9 @@ function buildMissingApiUrlMessage(runtimeConfigPath) {
     "Action Desk API URL is not configured.",
     configInstruction,
     "{",
-    '  "ACTION_DESK_API_URL": "http://localhost:3960"',
+    '  "ACTION_DESK_API_URL": "http://localhost:3960",',
+    '  "VITE_AZURE_CLIENT_ID": "<client-id>",',
+    '  "VITE_AZURE_TENANT_ID": "<tenant-id>"',
     "}",
     "VITE_ACTION_DESK_API_URL is also accepted. The installer intentionally does not include .env.",
   ].join("\n");
