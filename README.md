@@ -83,6 +83,19 @@ VITE_INBOX_SOURCE=api
 
 Pilot mode hides seeded inbox data and suppresses mock order context in the visible UI.
 
+## AI-Assisted Classification
+
+Phase 1 AI support is optional and assistive only. To enable local Ollama classification, run Ollama on the backend server, pull `qwen2.5:3b`, and set:
+
+```bash
+ACTION_DESK_AI_ENABLED=true
+VITE_AI_CLASSIFICATION_ENABLED=true
+OLLAMA_BASE_URL=http://127.0.0.1:11434
+OLLAMA_MODEL=qwen2.5:3b
+```
+
+Set `ACTION_DESK_AI_ENABLED=false` or `VITE_AI_CLASSIFICATION_ENABLED=false` to disable it. See [docs/ollama-ai-classification.md](docs/ollama-ai-classification.md).
+
 ## Microsoft Auth
 
 Local Microsoft sign-in expects this SPA redirect URI to be registered in Azure App Registration:

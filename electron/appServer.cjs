@@ -8,6 +8,9 @@ const {
   buildSessionSummary,
   getCapabilitiesForRole,
 } = require("./sharedAuthPolicy.cjs");
+const {
+  classifyEmailWithOllama,
+} = require("./ollamaEmailClassifier.cjs");
 
 const DEFAULT_HOST = "localhost";
 const DEFAULT_PORT = 3960;
@@ -916,11 +919,22 @@ function getGraphReplyDraftPayload(body) {
       body?.id,
   );
   const replyText =
-    typeof body?.replyText === "string" ? body.replyText.trim() : "";
+    typeof body?.replyText === "string" ? body.replyText : "";
 
   return {
     messageId,
     replyText,
+  };
+}
+
+function createGraphReplyDraftBody(replyText) {
+  return {
+    message: {
+      body: {
+        contentType: "Text",
+        content: replyText,
+      },
+    },
   };
 }
 
@@ -1470,7 +1484,7 @@ async function createOutlookReplyDraft(req, res, requestUrl, context) {
     return true;
   }
 
-  if (!replyText) {
+  if (!replyText.trim()) {
     sendApiError(req, res, 400, {
       code: "missing_reply_text",
       message: "Reply text is required to create an Outlook draft.",
@@ -1496,9 +1510,7 @@ async function createOutlookReplyDraft(req, res, requestUrl, context) {
         Accept: "application/json",
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        comment: replyText,
-      }),
+      body: JSON.stringify(createGraphReplyDraftBody(replyText)),
     },
   );
   const graphPayload = await readGraphResponsePayload(response);
@@ -1611,6 +1623,107 @@ async function handleOutlookRoute(req, res, requestUrl, context) {
   }
 
   return false;
+}
+
+async function handleAiClassificationRoute(req, res, logger, backendApi) {
+  if (req.method !== "POST") {
+    sendApiError(req, res, 405, {
+      code: "method_not_allowed",
+      message: "AI classification only supports POST.",
+      retryable: false,
+      context: "/api/ai/classify-email",
+    });
+    return true;
+  }
+
+  try {
+    const body = await readRequestBody(req);
+
+    if (hasBackendApi(backendApi)) {
+      logger?.info?.("ai", "Forwarding AI classification to backend API.", {
+        context: "/api/ai/classify-email",
+        backendApiUrl: backendApi.baseUrl,
+      });
+
+      const classification = await backendApi.requestJson("/api/ai/classify-email", {
+        method: "POST",
+        body,
+      });
+
+      logger?.info?.("ai", "Backend AI classification completed.", {
+        context: "/api/ai/classify-email",
+        backendApiUrl: backendApi.baseUrl,
+        category: classification?.category,
+        actionable: classification?.actionable,
+        urgency: classification?.urgency,
+        confidence: classification?.confidence,
+        aiSource: classification?.aiSource,
+      });
+
+      sendJson(req, res, 200, classification);
+      return true;
+    }
+
+    logger?.info?.("ai", "AI classification route called.", {
+      context: "/api/ai/classify-email",
+      provider: "ollama",
+    });
+    const classification = await classifyEmailWithOllama(body, {
+      onDiagnostic(diagnostic) {
+        const level = diagnostic?.level === "warn" ? "warn" : "info";
+        const event = diagnostic?.event || "ollamaClassificationDiagnostic";
+        const metadata =
+          diagnostic && typeof diagnostic.metadata === "object"
+            ? diagnostic.metadata
+            : {};
+
+        logger?.[level]?.("ai", event, {
+          context: "/api/ai/classify-email",
+          provider: "ollama",
+          ...metadata,
+        });
+      },
+    });
+
+    logger?.info?.("ai", "AI classification route completed.", {
+      context: "/api/ai/classify-email",
+      provider: "ollama",
+      category: classification.category,
+      actionable: classification.actionable,
+      urgency: classification.urgency,
+      confidence: classification.confidence,
+      aiSource: classification.aiSource,
+    });
+
+    sendJson(req, res, 200, classification);
+  } catch (error) {
+    const statusCode = Number.isInteger(error?.statusCode)
+      ? error.statusCode
+      : 503;
+    const code = error?.code ?? "ai_unavailable";
+    const message =
+      error instanceof Error
+        ? error.message
+        : "AI classification is unavailable.";
+
+    logger?.warn?.("ai", "AI classification route failed.", {
+      code,
+      statusCode,
+      error: message,
+      fallbackReason: code,
+      context: "/api/ai/classify-email",
+      details: error?.details,
+    });
+    sendApiError(req, res, statusCode, {
+      code,
+      message,
+      retryable: error?.retryable ?? statusCode >= 500,
+      context: "/api/ai/classify-email",
+      details: error?.details,
+    });
+  }
+
+  return true;
 }
 
 async function handleInboxMessagesRequest(req, res, logger, authProvider, store) {
@@ -5972,6 +6085,11 @@ function createRequestHandler(options) {
           context: requestUrl.pathname,
         });
       }
+      return;
+    }
+
+    if (requestUrl.pathname === "/api/ai/classify-email") {
+      await handleAiClassificationRoute(req, res, logger, backendApi);
       return;
     }
 

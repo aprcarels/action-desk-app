@@ -183,6 +183,9 @@ const SYSTEM_REPORT_SENDER_PATTERNS = [
     "reporting@",
     "scheduledreports@",
 ];
+function isInternalSender(senderEmail) {
+    return senderEmail.endsWith("@apexpress.com");
+}
 function normalizeEmailText(email) {
     return [email.subject, email.previewText, email.body]
         .filter((value) => typeof value === "string" && value.trim().length > 0)
@@ -265,18 +268,31 @@ function classifyWorkType(email, analysis) {
     const customerSignals = hasCustomerSignals(normalizedLatestMessage, analysis);
     const suspicious = (0, emailWorkHeuristics_1.includesAny)(normalizedLatestMessage, SUSPICIOUS_PATTERNS);
     const threadContinuation = (0, emailWorkHeuristics_1.isLikelyThreadContinuation)(latestMessageText, email.body || "");
-    const internalOperations = (0, emailWorkHeuristics_1.isInternalOperationsThread)(normalizedLatestMessage);
+    const internalOperationalReport = (0, emailWorkHeuristics_1.isInternalOperationalReport)(normalizedLatestMessage) ||
+        (0, emailWorkHeuristics_1.isInternalOperationalReport)(normalizedText);
+    const internalOperations = (0, emailWorkHeuristics_1.isInternalOperationsThread)(normalizedLatestMessage) ||
+        (0, emailWorkHeuristics_1.isInternalOperationsThread)(normalizedText);
     const system = isLowValueSystemReportEmail(email) ||
         (0, emailWorkHeuristics_1.includesAny)(normalizedLatestMessage, SYSTEM_PATTERNS) ||
         SYSTEM_SENDER_PATTERNS.some((pattern) => sender.includes(pattern));
-    const vendor = (0, emailWorkHeuristics_1.includesAny)(normalizedLatestMessage, VENDOR_PATTERNS) &&
+    const vendorSalesOutreach = (0, emailWorkHeuristics_1.isVendorSalesOutreach)(normalizedLatestMessage) ||
+        (0, emailWorkHeuristics_1.isVendorSalesOutreach)(normalizedText);
+    const vendor = (vendorSalesOutreach || (0, emailWorkHeuristics_1.includesAny)(normalizedLatestMessage, VENDOR_PATTERNS)) &&
         !hasDirectCustomerSignals(normalizedLatestMessage, analysis) &&
         !hasTextOrderIdentifier(normalizedLatestMessage);
     const internal = (0, emailWorkHeuristics_1.includesAny)(normalizedLatestMessage, INTERNAL_PATTERNS) ||
         internalOperations ||
+        internalOperationalReport ||
+        (isInternalSender(sender) && internalOperationalReport) ||
         (threadContinuation && !(0, emailWorkHeuristics_1.hasClearRequest)(normalizedLatestMessage));
     if (suspicious) {
         return "suspicious";
+    }
+    if (vendorSalesOutreach) {
+        return "vendor";
+    }
+    if (internalOperationalReport && !(0, emailWorkHeuristics_1.hasClearRequest)(normalizedLatestMessage)) {
+        return "internal";
     }
     if (system) {
         return "system";
@@ -304,18 +320,18 @@ function createSuppressedAnalysis(analysis, workType) {
         : workType === "system"
             ? "System, calendar, or automated administrative message. Not a customer-service case."
             : workType === "vendor"
-                ? "Vendor or account-maintenance thread. Review internally only if your team owns it."
+                ? "Vendor sales outreach or account-maintenance thread. Not a customer-service case."
                 : workType === "internal"
-                    ? "Internal or awareness-only message. Keep for review, not for customer-service follow-up."
+                    ? "Internal operational report or awareness-only message. Keep for review, not for customer-service follow-up."
                     : "This message is not clearly a customer-service case and should be reviewed before any reply.";
     const nextAction = workType === "suspicious"
         ? "Review internally as suspicious or phishing-related mail. Do not send a customer-service reply unless ownership is confirmed."
         : workType === "system"
             ? "No customer-service reply recommended. Keep for awareness or route to the appropriate internal owner if follow-up is needed."
             : workType === "vendor"
-                ? "Review internally as a vendor or account-maintenance thread. Reply only if your team intentionally owns the request."
+                ? "No customer-service action needed. Mark not relevant unless an internal owner intentionally wants to review the vendor outreach."
                 : workType === "internal"
-                    ? "Keep this for internal awareness or review only. Do not send a customer-service reply unless a clear customer action is requested."
+                    ? "No customer-service reply recommended. Keep this for internal awareness or review only unless a clear customer action is requested."
                     : "Review first and confirm whether this belongs in customer service before replying or taking action.";
     return {
         ...analysis,
@@ -404,6 +420,8 @@ function shouldShowInCustomerServiceQueue(item) {
     const hasDirectCustomerContext = hasDirectCustomerSignals(latestMessageText, analysis) ||
         hasDirectCustomerSignals(fullText, analysis);
     const hasActionableCustomerAsk = hasActionableRequestSignals(latestMessageText, analysis);
+    const internalOperationalReport = (0, emailWorkHeuristics_1.isInternalOperationalReport)(latestMessageText) ||
+        (0, emailWorkHeuristics_1.isInternalOperationalReport)(fullText);
     const isContinuationWithoutAsk = analysis.isThreadContinuation === true &&
         !analysis.hasClearRequest &&
         !hasBroadCustomerSignals;
@@ -416,6 +434,9 @@ function shouldShowInCustomerServiceQueue(item) {
         return false;
     }
     if (analysis.workType === "internal") {
+        if (internalOperationalReport && !hasActionableCustomerAsk) {
+            return false;
+        }
         return hasDirectCustomerContext || hasActionableCustomerAsk;
     }
     if (isContinuationWithoutAsk) {

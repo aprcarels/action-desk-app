@@ -81,6 +81,9 @@ function getWorkType(options) {
     if ((0, emailWorkHeuristics_1.includesAny)(options.normalizedEmail, SUSPICIOUS_PATTERNS)) {
         return "suspicious";
     }
+    if (options.isVendorSalesOutreach) {
+        return "vendor";
+    }
     if (options.likelyAutomatedAlert ||
         (0, emailWorkHeuristics_1.includesAny)(options.normalizedEmail, CALENDAR_ADMIN_PATTERNS)) {
         return "system";
@@ -219,6 +222,12 @@ function getRefinedConfidence(options) {
     return options.analysis.confidence;
 }
 function getRefinedSummary(options) {
+    if (options.analysis.workType === "vendor") {
+        return "Vendor sales outreach or account-maintenance message. Not a customer-service case.";
+    }
+    if (options.analysis.workType === "internal" && options.isInternalOperationalReport) {
+        return "Internal operational report. No customer-service reply is needed.";
+    }
     if (options.actionability === "no_action_needed") {
         return "Informational message indicates no immediate action is needed.";
     }
@@ -286,28 +295,36 @@ function refineEmailAnalysis(email, analysis) {
     const normalizedEmail = fullText.toLowerCase();
     const latestMessageText = (0, emailWorkHeuristics_1.extractLatestMessageText)(emailText);
     const normalizedLatestMessage = (latestMessageText || fullText).toLowerCase();
+    const vendorSalesOutreach = (0, emailWorkHeuristics_1.isVendorSalesOutreach)(normalizedLatestMessage) ||
+        (0, emailWorkHeuristics_1.isVendorSalesOutreach)(normalizedEmail);
     const likelyAutomatedAlert = (0, emailWorkHeuristics_1.includesAny)(normalizedEmail, ALERT_PATTERNS);
     const noActionNeeded = normalizedLatestMessage.includes("no action needed") ||
         normalizedLatestMessage.includes("no action required") ||
         normalizedLatestMessage.includes("do not reply");
-    const hasExplicitRequest = (0, emailWorkHeuristics_1.hasClearRequest)(normalizedLatestMessage);
+    const hasExplicitRequest = !vendorSalesOutreach && (0, emailWorkHeuristics_1.hasClearRequest)(normalizedLatestMessage);
     const awarenessOnly = (0, emailWorkHeuristics_1.includesAny)(normalizedLatestMessage, AWARENESS_PATTERNS) && !hasExplicitRequest;
     const informational = awarenessOnly || normalizedLatestMessage.includes("for your information");
     const isThreadContinuation = (0, emailWorkHeuristics_1.isLikelyThreadContinuation)(latestMessageText, emailText);
-    const isInternalOperations = (0, emailWorkHeuristics_1.isInternalOperationsThread)(normalizedLatestMessage);
+    const internalOperationalReport = (0, emailWorkHeuristics_1.isInternalOperationalReport)(normalizedLatestMessage) ||
+        (0, emailWorkHeuristics_1.isInternalOperationalReport)(normalizedEmail);
+    const isInternalOperations = (0, emailWorkHeuristics_1.isInternalOperationsThread)(normalizedLatestMessage) ||
+        (0, emailWorkHeuristics_1.isInternalOperationsThread)(normalizedEmail);
     const confirmationRequest = (0, emailWorkHeuristics_1.hasConfirmationRequest)(normalizedLatestMessage);
     const logisticsContext = (0, emailWorkHeuristics_1.hasLogisticsCoordinationSignals)(normalizedLatestMessage);
     const operationalTimingSignal = (0, emailWorkHeuristics_1.hasShippingDeadlineRequest)(normalizedLatestMessage) ||
         (0, emailWorkHeuristics_1.hasOperationalTimingSignal)(normalizedLatestMessage);
     const alertLikeStatusRequest = (likelyAutomatedAlert || isInternalOperations || isThreadContinuation) &&
         (analysisWithIdentifiers.intent === "where_is_my_order" || analysisWithIdentifiers.intent === "general_support");
-    const refinedIntent = alertLikeStatusRequest ? "general_support" : analysisWithIdentifiers.intent;
+    const refinedIntent = vendorSalesOutreach || alertLikeStatusRequest
+        ? "general_support"
+        : analysisWithIdentifiers.intent;
     const workType = getWorkType({
         normalizedEmail,
         likelyAutomatedAlert,
         awarenessOnly,
         hasExplicitRequest,
         isInternalOperations,
+        isVendorSalesOutreach: vendorSalesOutreach,
         analysis: {
             ...analysisWithIdentifiers,
             intent: refinedIntent,
@@ -352,10 +369,12 @@ function refineEmailAnalysis(email, analysis) {
         hasLogisticsContext: logisticsContext,
         hasOperationalTimingSignal: operationalTimingSignal,
     });
-    const refinedRisks = Array.from(new Set([
-        ...analysisWithIdentifiers.risks,
-        ...((0, emailWorkHeuristics_1.includesAny)(normalizedEmail, FRUSTRATION_PATTERNS) ? ["customer_frustration"] : []),
-    ]));
+    const refinedRisks = vendorSalesOutreach
+        ? []
+        : Array.from(new Set([
+            ...analysisWithIdentifiers.risks,
+            ...((0, emailWorkHeuristics_1.includesAny)(normalizedEmail, FRUSTRATION_PATTERNS) ? ["customer_frustration"] : []),
+        ]));
     return {
         ...analysisWithIdentifiers,
         intent: refinedIntent,
@@ -376,12 +395,14 @@ function refineEmailAnalysis(email, analysis) {
                 ...analysisWithIdentifiers,
                 intent: refinedIntent,
                 urgency,
+                workType,
                 hasClearRequest: hasExplicitRequest,
                 isThreadContinuation,
             },
             messageType,
             actionability,
             isThreadContinuation,
+            isInternalOperationalReport: internalOperationalReport,
         }),
         messageType,
         actionability,

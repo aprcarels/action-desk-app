@@ -21,6 +21,7 @@
     "lint": "eslint .",
     "pack:desktop": "npm run build:all && electron-builder --dir",
     "package:win": "node scripts/write-installer-api-url.cjs && npm run build && npm run desktop:prep && electron-builder --win nsis",
+    "smoke:ai": "node scripts/smoke-test-ollama-classification.cjs",
     "pretest": "npm run ensure:test-native",
     "test": "vitest run",
     "preview": "vite preview"

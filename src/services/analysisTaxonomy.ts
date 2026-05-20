@@ -42,6 +42,9 @@ const INTENT_ALIASES: Record<string, IntentCode> = {
   general_support: "general_support",
   general_support_request: "general_support",
   duplicate_shipment_concern: "general_support",
+  not_relevant: "general_support",
+  sales_outreach: "general_support",
+  vendor_solicitation: "general_support",
 };
 
 const RISK_ALIASES: Record<string, RiskCode | null> = {

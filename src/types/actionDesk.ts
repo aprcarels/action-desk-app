@@ -355,6 +355,26 @@ export type EmailAnalysis = {
 
 export type AnalysisSource = "ai" | "fallback" | "heuristic" | "hybrid";
 
+export type AiEmailClassificationCategory =
+  | "customer support request"
+  | "order/shipment issue"
+  | "billing/refund"
+  | "vendor sales outreach"
+  | "internal operational update"
+  | "operational report"
+  | "internal communication"
+  | "spam/phishing"
+  | "no action needed";
+
+export type AiEmailClassification = {
+  category: AiEmailClassificationCategory;
+  actionable: boolean;
+  urgency: "low" | "medium" | "high";
+  summary: string;
+  confidence: number;
+  aiSource: "ollama";
+};
+
 export type PilotQueueView =
   | "active"
   | "waiting_on_customer"
@@ -409,6 +429,7 @@ export type OrderContext = {
 export type ActionDeskResult = {
   analysis: EmailAnalysis;
   analysisSource: AnalysisSource;
+  aiClassification?: AiEmailClassification;
   orderContext?: OrderContext;
   replyDraft: string;
   priorityScore: number;

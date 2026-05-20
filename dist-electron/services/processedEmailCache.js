@@ -13,6 +13,9 @@ function cloneProcessedEmail(item) {
         result: item.result
             ? {
                 ...item.result,
+                aiClassification: item.result.aiClassification
+                    ? { ...item.result.aiClassification }
+                    : undefined,
                 analysis: {
                     ...item.result.analysis,
                     risks: [...item.result.analysis.risks],

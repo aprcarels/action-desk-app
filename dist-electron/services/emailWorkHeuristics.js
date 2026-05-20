@@ -1,6 +1,8 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.includesAny = includesAny;
+exports.isVendorSalesOutreach = isVendorSalesOutreach;
+exports.isInternalOperationalReport = isInternalOperationalReport;
 exports.hasCustomerFollowUpRequest = hasCustomerFollowUpRequest;
 exports.extractLatestMessageText = extractLatestMessageText;
 exports.hasClearRequest = hasClearRequest;
@@ -143,6 +145,40 @@ const INTERNAL_OPERATION_PATTERNS = [
     "pallet",
     "units on hand",
 ];
+const INTERNAL_OPERATION_REPORT_PATTERNS = [
+    "all orders are on track",
+    "orders are on track",
+    "tracking numbers are in excel",
+    "tracking numbers are attached",
+    "tracking number report",
+    "tracking report",
+    "orders rolling over",
+    "order rolling over",
+    "rolling over to process tomorrow",
+    "roll over to process tomorrow",
+    "rolling over for tomorrow",
+    "process tomorrow",
+    "processing tomorrow",
+    "eod report",
+    "eod status",
+    "end of day report",
+    "end-of-day report",
+    "daily status report",
+    "daily operations report",
+    "operations report",
+    "status report",
+    "excel report",
+];
+const INTERNAL_OPERATION_REPORT_MARKERS = [
+    "eod",
+    "end of day",
+    "end-of-day",
+    "daily status",
+    "daily report",
+    "status report",
+    "operations report",
+    "operational report",
+];
 const HIGH_URGENCY_PATTERNS = [
     "hot!",
     "hot",
@@ -246,11 +282,140 @@ const OPERATIONAL_TIMING_PATTERNS = [
     "drop",
     "dropped",
 ];
+const VENDOR_SALES_OUTREACH_PATTERNS = [
+    "account executive",
+    "book a demo",
+    "book time",
+    "can i show you",
+    "can we show you",
+    "cold outreach",
+    "demo",
+    "for your it",
+    "new hire deployment",
+    "our platform",
+    "our service",
+    "our solution",
+    "pricing",
+    "quick chat",
+    "quick call",
+    "quick conversation",
+    "recover devices",
+    "recovery rate",
+    "roi",
+    "sales",
+    "schedule a call",
+    "schedule a demo",
+    "show you what it looks like",
+    "technical sales manager",
+    "we help companies",
+    "we help teams",
+    "worth a conversation",
+    "your it team",
+];
+const VENDOR_SALES_VALUE_PATTERNS = [
+    "asset recovery",
+    "device recovery",
+    "durability",
+    "hardware durability",
+    "industrial environment",
+    "industrial environments",
+    "it asset",
+    "made in america",
+    "made in the usa",
+    "new hire",
+    "onboarding",
+    "offboarding",
+    "railroad environment",
+    "railroad environments",
+    "recover",
+    "reduce cost",
+    "rugged hardware",
+    "save money",
+    "savings",
+    "service",
+    "software",
+];
+const VENDOR_SALES_CALL_TO_ACTION_PATTERNS = [
+    "are you open to",
+    "open to a call",
+    "open to a quick chat",
+    "book",
+    "can i show you",
+    "can we show you",
+    "demo",
+    "quick chat",
+    "quick conversation",
+    "schedule",
+    "show you",
+    "talk next week",
+    "worth a conversation",
+    "would you be open",
+];
+const CUSTOMER_SERVICE_REQUEST_PATTERNS = [
+    "address change",
+    "cancel my order",
+    "cancel order",
+    "damaged shipment",
+    "delivery receipt",
+    "did not receive",
+    "missing item",
+    "missing items",
+    "my order",
+    "not received",
+    "order status",
+    "proof of delivery",
+    "shipment status",
+    "tracking number",
+    "where is my order",
+];
+const CUSTOMER_CASE_IDENTIFIER_PATTERN = /\b(?:ord-\d+|order\s*#?\s*[a-z0-9-]{4,}|\bpo[-\s]?\d+|\b\d{4,}-\d{4,}\b)\b/i;
 function normalizeWhitespace(value) {
     return value.replace(/\r/g, "").replace(/[ \t]+/g, " ").trim();
 }
 function includesAny(text, patterns) {
     return patterns.some((pattern) => text.includes(pattern));
+}
+function isVendorSalesOutreach(text) {
+    const normalized = normalizeWhitespace(text).toLowerCase();
+    if (!normalized) {
+        return false;
+    }
+    const hasExplicitCustomerCase = includesAny(normalized, CUSTOMER_SERVICE_REQUEST_PATTERNS) ||
+        CUSTOMER_CASE_IDENTIFIER_PATTERN.test(normalized);
+    if (hasExplicitCustomerCase) {
+        return false;
+    }
+    const hasSalesPhrase = includesAny(normalized, VENDOR_SALES_OUTREACH_PATTERNS);
+    const hasValueProp = includesAny(normalized, VENDOR_SALES_VALUE_PATTERNS) ||
+        /\b\d{1,3}%\s+(?:recovery|recovered|savings|roi|return)\b/.test(normalized);
+    const hasCallToAction = includesAny(normalized, VENDOR_SALES_CALL_TO_ACTION_PATTERNS);
+    return ((hasSalesPhrase && (hasValueProp || hasCallToAction)) ||
+        (hasValueProp && hasCallToAction && normalized.includes("we ")));
+}
+function isInternalOperationalReport(text) {
+    const normalized = normalizeWhitespace(text).toLowerCase();
+    if (!normalized) {
+        return false;
+    }
+    const hasReportMarker = INTERNAL_OPERATION_REPORT_MARKERS.some((marker) => (marker === "eod"
+        ? /\beod\b/.test(normalized)
+        : normalized.includes(marker))) ||
+        /\beod\s+\d{1,2}[-/]\d{1,2}[-/]\d{2,4}\b/.test(normalized);
+    const hasOperationalReportLanguage = includesAny(normalized, INTERNAL_OPERATION_REPORT_PATTERNS);
+    const hasExcelTrackingRollup = normalized.includes("excel") &&
+        normalized.includes("order") &&
+        (normalized.includes("tracking number") ||
+            normalized.includes("tracking numbers") ||
+            normalized.includes("tracking"));
+    const hasRolloverLanguage = normalized.includes("roll") &&
+        normalized.includes("over") &&
+        normalized.includes("process") &&
+        normalized.includes("tomorrow");
+    return ((hasReportMarker &&
+        (hasOperationalReportLanguage ||
+            hasExcelTrackingRollup ||
+            hasRolloverLanguage)) ||
+        (hasExcelTrackingRollup && hasRolloverLanguage));
 }
 function includesTopicRequestPattern(text) {
     return TOPIC_REQUEST_PATTERNS.some((pattern) => (pattern === "eta" ? /\beta\b/.test(text) : text.includes(pattern)));
@@ -321,7 +486,9 @@ function isLikelyThreadContinuation(latestMessageText, fullEmailText) {
     return hasQuotedThreadMarkers && wordCount <= 8 && !hasClearRequest(normalizedLatest);
 }
 function isInternalOperationsThread(text) {
-    return includesAny(normalizeWhitespace(text).toLowerCase(), INTERNAL_OPERATION_PATTERNS);
+    const normalized = normalizeWhitespace(text).toLowerCase();
+    return (includesAny(normalized, INTERNAL_OPERATION_PATTERNS) ||
+        isInternalOperationalReport(normalized));
 }
 function hasShippingDeadlineRequest(text) {
     return includesAny(normalizeWhitespace(text).toLowerCase(), SHIPPING_DEADLINE_PATTERNS);

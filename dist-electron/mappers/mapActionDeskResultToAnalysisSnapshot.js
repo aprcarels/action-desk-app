@@ -62,6 +62,9 @@ function mapActionDeskResultToAnalysisSnapshot(options) {
         replyDraft: result.replyDraft || null,
         warnings: result.warning ? [result.warning] : [],
         analysisSource: mapCurrentAnalysisSource(result.analysisSource),
+        aiClassification: result.aiClassification
+            ? { ...result.aiClassification }
+            : undefined,
         createdAt,
     };
 }

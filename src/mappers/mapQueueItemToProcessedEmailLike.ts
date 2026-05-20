@@ -95,6 +95,9 @@ export function mapQueueItemToProcessedEmailLike(options: {
     analysisSource: mapSnapshotSourceToCurrentSource(
       snapshot.analysisSource,
     ),
+    aiClassification: snapshot.aiClassification
+      ? { ...snapshot.aiClassification }
+      : undefined,
     orderContext: mapQueueItemToOrderContext(queueItem),
     replyDraft: queueItem.replyDraft ?? snapshot.replyDraft ?? "",
     priorityScore: queueItem.priorityScore,

@@ -102,6 +102,119 @@ describe("customerServiceMail", () => {
     expect(normalized.analysis.nextAction).toContain("vendor");
   });
 
+  it("suppresses vendor sales outreach even when it mentions numbers, recovery, and deployment", () => {
+    const email = buildEmail({
+      senderName: "Grace Turner",
+      senderEmail: "grace.turner@teamunduit.com",
+      subject: "are you into numbers?",
+      body: [
+        "Hi,",
+        "",
+        "Most IT teams recover less than half of devices after offboarding.",
+        "Unduit helps companies reach a 98% recovery rate and simplify new hire deployment.",
+        "Can I show you what it looks like for your IT?",
+      ].join("\n"),
+      previewText:
+        "Unduit helps companies reach a 98% recovery rate and simplify new hire deployment.",
+    });
+
+    const normalized = normalizeProcessedEmailResult(
+      email,
+      buildResult({
+        analysis: {
+          ...buildResult().analysis,
+          intent: "where_is_my_order",
+          orderNumber: undefined,
+          risks: ["delay_or_no_tracking_update"],
+          summary: "Customer is asking for an order update but did not provide a usable identifier.",
+          nextAction: "Request the order number or usable reference for the shipment status request.",
+        },
+      }),
+    );
+
+    expect(normalized.analysis.intent).toBe("general_support");
+    expect(normalized.analysis.workType).toBe("vendor");
+    expect(normalized.analysis.actionability).toBe("no_action_needed");
+    expect(normalized.analysis.replyNeeded).toBe("no");
+    expect(normalized.analysis.risks).toEqual([]);
+    expect(normalized.analysis.nextAction.toLowerCase()).toContain("mark not relevant");
+    expect(normalized.analysis.nextAction.toLowerCase()).not.toContain("order number");
+    expect(normalized.replyDraft).toBe("");
+    expect(normalized.priorityScore).toBeLessThan(20);
+    expect(
+      shouldShowInCustomerServiceQueue(buildProcessedEmail(email, normalized)),
+    ).toBe(false);
+  });
+
+  it("suppresses Duagon vendor outreach instead of requesting an order number", () => {
+    const email = buildEmail({
+      senderName: "Casey Morgan",
+      senderEmail: "casey.morgan@duagon.example",
+      subject: "RE: AP Express Logistics priorities",
+      body: [
+        "Hi AP Express team,",
+        "",
+        "Duagon builds made in America hardware for railroad environments where durability matters.",
+        "I am a Technical Sales Manager and wanted to see if AP Express is open to a quick chat.",
+      ].join("\n"),
+      previewText:
+        "Duagon builds made in America hardware for railroad environments.",
+    });
+
+    const normalized = normalizeProcessedEmailResult(
+      email,
+      buildResult({
+        analysis: {
+          ...buildResult().analysis,
+          intent: "where_is_my_order",
+          orderNumber: undefined,
+          risks: ["delay_or_no_tracking_update"],
+          summary: "Customer is asking for an order update but did not provide a usable identifier.",
+          nextAction: "Request the order number or usable reference for the shipment status request.",
+        },
+      }),
+    );
+
+    expect(normalized.analysis.intent).toBe("general_support");
+    expect(normalized.analysis.workType).toBe("vendor");
+    expect(normalized.analysis.actionability).toBe("no_action_needed");
+    expect(normalized.analysis.replyNeeded).toBe("no");
+    expect(normalized.analysis.risks).toEqual([]);
+    expect(normalized.analysis.nextAction.toLowerCase()).not.toContain("order number");
+    expect(normalized.replyDraft).toBe("");
+    expect(
+      shouldShowInCustomerServiceQueue(buildProcessedEmail(email, normalized)),
+    ).toBe(false);
+  });
+
+  it("suppresses internal replies that only quote vendor outreach", () => {
+    const email = buildEmail({
+      senderName: "Hector Salas",
+      senderEmail: "hsalas@apexpress.com",
+      subject: "RE: AP Express Logistics priorities",
+      body: [
+        "Please see below for awareness.",
+        "",
+        "From: Casey Morgan <casey.morgan@duagon.example>",
+        "Sent: Tuesday, May 19, 2026 3:10 PM",
+        "Subject: AP Express Logistics priorities",
+        "Duagon builds made in America hardware for railroad environments where durability matters.",
+        "Would AP Express be open to a quick chat?",
+      ].join("\n"),
+      previewText: "Please see below for awareness.",
+    });
+
+    const normalized = normalizeProcessedEmailResult(email, buildResult());
+
+    expect(normalized.analysis.workType).toBe("vendor");
+    expect(normalized.analysis.intent).toBe("general_support");
+    expect(normalized.analysis.replyNeeded).toBe("no");
+    expect(normalized.replyDraft).toBe("");
+    expect(
+      shouldShowInCustomerServiceQueue(buildProcessedEmail(email, normalized)),
+    ).toBe(false);
+  });
+
   it("suppresses short continuation replies with no clear ask", () => {
     const email = buildEmail({
       subject: "Re: Order thread",
@@ -303,6 +416,49 @@ describe("customerServiceMail", () => {
     expect(["internal", "vendor"]).toContain(normalized.analysis.workType);
     expect(normalized.analysis.replyNeeded).toBe("no");
     expect(normalized.replyDraft).toBe("");
+  });
+
+  it("suppresses EQISMART EOD internal reports instead of classifying them as WIMO", () => {
+    const email = buildEmail({
+      senderName: "Hector Salas",
+      senderEmail: "hsalas@apexpress.com",
+      subject: "EQISMART - EOD 05-19-26",
+      body: [
+        "All orders are on track.",
+        "Tracking numbers are in Excel.",
+        "Some orders are rolling over to process tomorrow.",
+      ].join("\n"),
+      previewText: "All orders are on track. Tracking numbers are in Excel.",
+    });
+
+    const normalized = normalizeProcessedEmailResult(
+      email,
+      buildResult({
+        analysis: {
+          ...buildResult().analysis,
+          intent: "where_is_my_order",
+          urgency: "high",
+          orderNumber: undefined,
+          risks: ["delay_or_no_tracking_update"],
+          hasClearRequest: false,
+          summary: "Customer is asking for an order update but did not provide a usable identifier.",
+          nextAction: "Request the order number or usable reference for the shipment status request.",
+        },
+      }),
+    );
+
+    expect(normalized.analysis.intent).toBe("general_support");
+    expect(normalized.analysis.workType).toBe("internal");
+    expect(normalized.analysis.urgency).toBe("low");
+    expect(normalized.analysis.actionability).toBe("no_action_needed");
+    expect(normalized.analysis.replyNeeded).toBe("no");
+    expect(normalized.analysis.risks).toEqual([]);
+    expect(normalized.analysis.nextAction.toLowerCase()).not.toContain("order number");
+    expect(normalized.replyDraft).toBe("");
+    expect(normalized.priorityScore).toBeLessThan(20);
+    expect(
+      shouldShowInCustomerServiceQueue(buildProcessedEmail(email, normalized)),
+    ).toBe(false);
   });
 
   it("keeps automated system notifications out of the customer service queue", () => {

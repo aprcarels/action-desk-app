@@ -33,6 +33,73 @@ describe("analyzeEmail", () => {
     expect(analysis.replyNeeded).toBe("yes");
   });
 
+  it("classifies vendor sales outreach as not customer-service actionable", () => {
+    const analysis = analyzeEmail(
+      buildAnalysisInput({
+        subject: "are you into numbers?",
+        body: [
+          "Hi,",
+          "",
+          "Most IT teams recover less than half of devices after offboarding.",
+          "Unduit helps companies reach a 98% recovery rate and simplify new hire deployment.",
+          "Can I show you what it looks like for your IT?",
+          "",
+          "Grace Turner",
+          "Unduit",
+        ].join("\n"),
+      }),
+    );
+
+    expect(analysis.intent).not.toBe("where_is_my_order");
+    expect(analysis.intent).toBe("general_support");
+    expect(analysis.workType).toBe("vendor");
+    expect(analysis.actionability).toBe("no_action_needed");
+    expect(analysis.replyNeeded).toBe("no");
+    expect(analysis.risks).toEqual([]);
+    expect(analysis.nextAction.toLowerCase()).toContain("mark not relevant");
+    expect(analysis.nextAction.toLowerCase()).not.toContain("order number");
+    expect(analysis.summary.toLowerCase()).toContain("vendor sales outreach");
+  });
+
+  it("classifies Duagon vendor outreach as not customer-service actionable", () => {
+    const analysis = analyzeEmail(
+      buildAnalysisInput({
+        subject: "RE: AP Express Logistics priorities",
+        body: [
+          "Hi AP Express team,",
+          "",
+          "Duagon builds made in America hardware for railroad environments where durability matters.",
+          "I am a Technical Sales Manager and wanted to see if AP Express is open to a quick chat.",
+          "",
+          "Casey Morgan",
+          "Technical Sales Manager",
+        ].join("\n"),
+      }),
+    );
+
+    expect(analysis.intent).not.toBe("where_is_my_order");
+    expect(analysis.workType).toBe("vendor");
+    expect(analysis.actionability).toBe("no_action_needed");
+    expect(analysis.replyNeeded).toBe("no");
+    expect(analysis.risks).toEqual([]);
+    expect(analysis.nextAction.toLowerCase()).not.toContain("order number");
+  });
+
+  it("still treats real customer shipment status requests as actionable order work", () => {
+    const analysis = analyzeEmail(
+      buildAnalysisInput({
+        subject: "Shipment status for ORD-1002",
+        body: "Hi support, can you send the current shipment status for order ORD-1002? The tracking number has not updated.",
+      }),
+    );
+
+    expect(analysis.intent).toBe("where_is_my_order");
+    expect(analysis.workType).toBe("customer_support");
+    expect(analysis.actionability).toBe("action_required");
+    expect(analysis.replyNeeded).toBe("yes");
+    expect(analysis.nextAction.toLowerCase()).toContain("shipment status");
+  });
+
   it("treats a direct cancel request as actionable customer work", () => {
     const analysis = analyzeEmail(
       "Please cancel all of those PTs. Pls confirm once canceled.",
@@ -74,6 +141,28 @@ describe("analyzeEmail", () => {
     expect(analysis.intent).toBe("general_support");
     expect(analysis.workType).toBe("internal");
     expect(analysis.replyNeeded).toBe("no");
+  });
+
+  it("classifies EQISMART EOD reports as internal operational updates", () => {
+    const analysis = analyzeEmail(
+      buildAnalysisInput({
+        subject: "EQISMART - EOD 05-19-26",
+        body: [
+          "All orders are on track.",
+          "Tracking numbers are in Excel.",
+          "Some orders are rolling over to process tomorrow.",
+        ].join("\n"),
+      }),
+    );
+
+    expect(analysis.intent).not.toBe("where_is_my_order");
+    expect(analysis.intent).toBe("general_support");
+    expect(analysis.workType).toBe("internal");
+    expect(analysis.urgency).toBe("low");
+    expect(analysis.actionability).toBe("no_action_needed");
+    expect(analysis.replyNeeded).toBe("no");
+    expect(analysis.risks).toEqual([]);
+    expect(analysis.nextAction.toLowerCase()).not.toContain("order number");
   });
 
   it("follows the latest ask over older quoted informational content", () => {
@@ -174,6 +263,21 @@ describe("analyzeEmail", () => {
     expect(analysis.intent).toBe("where_is_my_order");
     expect(analysis.actionability).toBe("action_required");
     expect(analysis.urgency).toBe("medium");
+  });
+
+  it("keeps legitimate delayed shipment requests actionable", () => {
+    const analysis = analyzeEmail(
+      buildAnalysisInput({
+        subject: "Delayed shipment for ORD-1002",
+        body: "Hi support, our shipment for order ORD-1002 is delayed and the tracking has not moved. Can you send an updated ETA?",
+      }),
+    );
+
+    expect(analysis.intent).toBe("where_is_my_order");
+    expect(analysis.workType).toBe("customer_support");
+    expect(analysis.actionability).toBe("action_required");
+    expect(analysis.replyNeeded).toBe("yes");
+    expect(analysis.risks).toContain("delay_or_no_tracking_update");
   });
 
   it("keeps awareness-only messages low urgency even when older quoted text was urgent", () => {

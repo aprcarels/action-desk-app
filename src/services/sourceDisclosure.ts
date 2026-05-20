@@ -21,13 +21,15 @@ export function getAnalysisSourceDisclosure(
       return {
         kind: "ai_assisted",
         label: "AI Assisted",
-        detail: "Analysis used an LLM-backed path with Action Desk rules and checks.",
+        detail:
+          "Analysis used an LLM-backed assistive layer; Action Desk rules remain authoritative.",
       };
     case "hybrid":
       return {
         kind: "ai_assisted",
         label: "AI Assisted",
-        detail: "Analysis combined LLM-backed classification with Action Desk rules.",
+        detail:
+          "Analysis includes assistive AI classification, while Action Desk rules remain authoritative.",
       };
     case "fallback":
     case "heuristic":
@@ -48,12 +50,18 @@ export function getAnalysisSourceDisclosure(
 export function getDraftSourceDisclosure(source: SourceValue): SourceDisclosure {
   switch (source) {
     case "ai":
-    case "hybrid":
       return {
         kind: "ai_assisted",
         label: "AI Assisted",
         detail:
-          "Draft uses Action Desk reply templates with AI-assisted triage context.",
+          "Draft uses Action Desk reply templates; AI classification is assistive context only.",
+      };
+    case "hybrid":
+      return {
+        kind: "rules_based",
+        label: "Rules-Based",
+        detail:
+          "Draft was produced by deterministic reply templates; AI classification is assistive context only.",
       };
     case "fallback":
     case "heuristic":

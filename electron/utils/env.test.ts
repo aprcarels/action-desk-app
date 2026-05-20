@@ -40,6 +40,10 @@ const originalViteActionDeskApiUrl = process.env.VITE_ACTION_DESK_API_URL;
 const originalAzureClientId = process.env.VITE_AZURE_CLIENT_ID;
 const originalAzureTenantId = process.env.VITE_AZURE_TENANT_ID;
 const originalAzureAuthority = process.env.VITE_AZURE_AUTHORITY;
+const originalActionDeskAiEnabled = process.env.ACTION_DESK_AI_ENABLED;
+const originalOllamaBaseUrl = process.env.OLLAMA_BASE_URL;
+const originalOllamaModel = process.env.OLLAMA_MODEL;
+const originalOllamaTimeoutMs = process.env.OLLAMA_TIMEOUT_MS;
 
 function resetApiUrlEnv() {
   if (originalActionDeskApiUrl === undefined) {
@@ -70,6 +74,30 @@ function resetApiUrlEnv() {
     delete process.env.VITE_AZURE_AUTHORITY;
   } else {
     process.env.VITE_AZURE_AUTHORITY = originalAzureAuthority;
+  }
+
+  if (originalActionDeskAiEnabled === undefined) {
+    delete process.env.ACTION_DESK_AI_ENABLED;
+  } else {
+    process.env.ACTION_DESK_AI_ENABLED = originalActionDeskAiEnabled;
+  }
+
+  if (originalOllamaBaseUrl === undefined) {
+    delete process.env.OLLAMA_BASE_URL;
+  } else {
+    process.env.OLLAMA_BASE_URL = originalOllamaBaseUrl;
+  }
+
+  if (originalOllamaModel === undefined) {
+    delete process.env.OLLAMA_MODEL;
+  } else {
+    process.env.OLLAMA_MODEL = originalOllamaModel;
+  }
+
+  if (originalOllamaTimeoutMs === undefined) {
+    delete process.env.OLLAMA_TIMEOUT_MS;
+  } else {
+    process.env.OLLAMA_TIMEOUT_MS = originalOllamaTimeoutMs;
   }
 }
 
@@ -152,6 +180,31 @@ describe("Electron runtime config", () => {
 
     expect(result.sourceKey).toBe("VITE_ACTION_DESK_API_URL");
     expect(process.env.ACTION_DESK_API_URL).toBe("http://localhost:3960");
+  });
+
+  it("applies Ollama runtime config values for assistive classification", () => {
+    delete process.env.OLLAMA_BASE_URL;
+    delete process.env.OLLAMA_MODEL;
+    delete process.env.OLLAMA_TIMEOUT_MS;
+    delete process.env.ACTION_DESK_AI_ENABLED;
+
+    const result = applyRuntimeConfig({
+      OLLAMA_BASE_URL: "http://127.0.0.1:11434",
+      OLLAMA_MODEL: "qwen2.5:3b",
+      OLLAMA_TIMEOUT_MS: "4500",
+      ACTION_DESK_AI_ENABLED: "true",
+    });
+
+    expect(result.appliedKeys).toEqual([
+      "ACTION_DESK_AI_ENABLED",
+      "OLLAMA_BASE_URL",
+      "OLLAMA_MODEL",
+      "OLLAMA_TIMEOUT_MS",
+    ]);
+    expect(process.env.OLLAMA_BASE_URL).toBe("http://127.0.0.1:11434");
+    expect(process.env.OLLAMA_MODEL).toBe("qwen2.5:3b");
+    expect(process.env.OLLAMA_TIMEOUT_MS).toBe("4500");
+    expect(process.env.ACTION_DESK_AI_ENABLED).toBe("true");
   });
 
   it("preserves existing dev env values when loading runtime config", () => {

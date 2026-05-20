@@ -16,7 +16,7 @@ describe("sourceDisclosure", () => {
     });
   });
 
-  it("labels AI and hybrid sources as AI assisted, not AI generated", () => {
+  it("labels AI and hybrid analysis as AI assisted, not AI generated", () => {
     expect(getAnalysisSourceDisclosure("ai")).toMatchObject({
       label: "AI Assisted",
       kind: "ai_assisted",
@@ -28,6 +28,10 @@ describe("sourceDisclosure", () => {
     expect(getDraftSourceDisclosure("ai")).toMatchObject({
       label: "AI Assisted",
       kind: "ai_assisted",
+    });
+    expect(getDraftSourceDisclosure("hybrid")).toMatchObject({
+      label: "Rules-Based",
+      kind: "rules_based",
     });
   });
 

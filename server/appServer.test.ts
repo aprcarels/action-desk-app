@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 const require = createRequire(import.meta.url);
 const nativeFetch = globalThis.fetch;
+const originalActionDeskAiEnabled = process.env.ACTION_DESK_AI_ENABLED;
 const { createRequestHandler } = require("../electron/appServer.cjs") as {
   createRequestHandler: (options: {
     distDir: string;
@@ -121,6 +122,247 @@ describe("appServer CORS", () => {
         expect(response.status).toBe(403);
         expect(response.headers.get("access-control-allow-origin")).toBeNull();
       }
+    } finally {
+      await closeTestServer(server);
+    }
+  });
+});
+
+describe("appServer AI classification route", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+
+    if (originalActionDeskAiEnabled === undefined) {
+      delete process.env.ACTION_DESK_AI_ENABLED;
+    } else {
+      process.env.ACTION_DESK_AI_ENABLED = originalActionDeskAiEnabled;
+    }
+  });
+
+  it("returns assistive Ollama classification without touching workflow state", async () => {
+    process.env.ACTION_DESK_AI_ENABLED = "true";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        json: async () => ({
+          response: JSON.stringify({
+            category: "order/shipment issue",
+            actionable: true,
+            urgency: "medium",
+            summary: "Customer is asking for shipment status.",
+            confidence: 0.87,
+          }),
+        }),
+      }),
+    );
+    const getBootstrap = vi.fn();
+    const logger = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    };
+    const handler = createRequestHandler({
+      distDir: path.resolve("."),
+      databasePath: path.resolve("tmp-shared.sqlite"),
+      store: {
+        getBootstrap,
+      },
+      logger,
+      authProvider: {},
+    });
+    const { server, origin } = await startTestServer(handler);
+
+    try {
+      const response = await nativeFetch(`${origin}/api/ai/classify-email`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          subject: "Shipment status for ORD-1002",
+          from: "customer@example.com",
+          body: "Can you send the current shipment status?",
+        }),
+      });
+      const payload = (await response.json()) as {
+        category?: string;
+        confidence?: number;
+        aiSource?: string;
+      };
+
+      expect(response.status).toBe(200);
+      expect(payload).toMatchObject({
+        category: "order/shipment issue",
+        confidence: 0.87,
+        aiSource: "ollama",
+      });
+      expect(getBootstrap).not.toHaveBeenCalled();
+      expect(logger.info).toHaveBeenCalledWith(
+        "ai",
+        "ollamaClassificationRequestStarted",
+        expect.objectContaining({
+          context: "/api/ai/classify-email",
+          provider: "ollama",
+          model: "qwen2.5:3b",
+        }),
+      );
+      expect(logger.info).toHaveBeenCalledWith(
+        "ai",
+        "ollamaClassificationResponseStatus",
+        expect.objectContaining({
+          status: 200,
+          ok: true,
+        }),
+      );
+      expect(logger.info).toHaveBeenCalledWith(
+        "ai",
+        "ollamaClassificationParsed",
+        expect.objectContaining({
+          category: "order/shipment issue",
+          actionable: true,
+          confidence: 0.87,
+        }),
+      );
+    } finally {
+      await closeTestServer(server);
+    }
+  });
+
+  it("smoke-tests vendor outreach through the AI classification endpoint", async () => {
+    process.env.ACTION_DESK_AI_ENABLED = "true";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        json: async () => ({
+          response: JSON.stringify({
+            category: "vendor sales outreach",
+            actionable: false,
+            urgency: "low",
+            summary: "Vendor is pitching rugged hardware and asking for a call.",
+            confidence: 0.92,
+          }),
+        }),
+      }),
+    );
+    const handler = createRequestHandler({
+      distDir: path.resolve("."),
+      databasePath: path.resolve("tmp-shared.sqlite"),
+      store: {},
+      logger: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      },
+      authProvider: {},
+    });
+    const { server, origin } = await startTestServer(handler);
+
+    try {
+      const response = await nativeFetch(`${origin}/api/ai/classify-email`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          subject: "RE: AP Express Logistics priorities",
+          from: "Casey Morgan, Technical Sales Manager <casey@duagon.example>",
+          body: [
+            "Duagon builds made in America hardware for railroad environments.",
+            "Would AP Express be open to a quick chat?",
+          ].join("\n"),
+        }),
+      });
+      const payload = (await response.json()) as {
+        category?: string;
+        actionable?: boolean;
+        urgency?: string;
+        aiSource?: string;
+      };
+
+      expect(response.status).toBe(200);
+      expect(payload).toMatchObject({
+        category: "vendor sales outreach",
+        actionable: false,
+        urgency: "low",
+        aiSource: "ollama",
+      });
+    } finally {
+      await closeTestServer(server);
+    }
+  });
+
+  it("forwards the local AI route to the configured backend API when available", async () => {
+    const backendApi = {
+      baseUrl: "http://192.168.15.177:4000",
+      requestJson: vi.fn().mockResolvedValue({
+        category: "vendor sales outreach",
+        actionable: false,
+        urgency: "low",
+        summary: "Vendor is asking for a sales call.",
+        confidence: 0.9,
+        aiSource: "ollama",
+      }),
+    };
+    const logger = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    };
+    const handler = createRequestHandler({
+      distDir: path.resolve("."),
+      databasePath: path.resolve("tmp-shared.sqlite"),
+      store: {},
+      logger,
+      authProvider: {},
+      backendApi,
+    });
+    const { server, origin } = await startTestServer(handler);
+
+    try {
+      const response = await nativeFetch(`${origin}/api/ai/classify-email`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          subject: "RE: AP Express Logistics priorities",
+          from: "casey@duagon.example",
+          body: "Would AP Express be open to a quick chat?",
+        }),
+      });
+      const payload = (await response.json()) as {
+        category?: string;
+        aiSource?: string;
+      };
+
+      expect(response.status).toBe(200);
+      expect(payload).toMatchObject({
+        category: "vendor sales outreach",
+        aiSource: "ollama",
+      });
+      expect(backendApi.requestJson).toHaveBeenCalledWith(
+        "/api/ai/classify-email",
+        expect.objectContaining({
+          method: "POST",
+          body: expect.objectContaining({
+            subject: "RE: AP Express Logistics priorities",
+          }),
+        }),
+      );
+      expect(logger.info).toHaveBeenCalledWith(
+        "ai",
+        "Forwarding AI classification to backend API.",
+        expect.objectContaining({
+          backendApiUrl: "http://192.168.15.177:4000",
+        }),
+      );
     } finally {
       await closeTestServer(server);
     }
@@ -1773,6 +2015,8 @@ describe("appServer Outlook webhooks", () => {
       },
     });
     const { server, origin } = await startTestServer(handler);
+    const liveReplyDraft =
+      "Hi Casey,\n\nThis is the live Action Desk generated reply.\nLine two stays on its own line.\n\nBest,\nSupport Team\n";
 
     try {
       const response = await nativeFetch(`${origin}/api/outlook/reply-drafts`, {
@@ -1783,7 +2027,7 @@ describe("appServer Outlook webhooks", () => {
         },
         body: JSON.stringify({
           messageId: "msg-1",
-          replyText: "Hi,\n\nI will check this shipment.\n\nBest,\nSupport Team",
+          replyText: liveReplyDraft,
         }),
       });
       const payload = (await response.json()) as {
@@ -1808,8 +2052,14 @@ describe("appServer Outlook webhooks", () => {
         "Content-Type": "application/json",
       });
       expect(graphPayload).toEqual({
-        comment: "Hi,\n\nI will check this shipment.\n\nBest,\nSupport Team",
+        message: {
+          body: {
+            contentType: "Text",
+            content: liveReplyDraft,
+          },
+        },
       });
+      expect(JSON.stringify(graphPayload)).not.toContain("Reply draft");
       expect(String(url)).not.toContain("/send");
     } finally {
       await cleanupOutlookTestContext(server, tempDir);

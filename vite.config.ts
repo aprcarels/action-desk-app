@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import type { ServerOptions } from "node:https";
 import { defineConfig } from "vite";
@@ -7,6 +8,19 @@ import { handleInboxMessagesRequest } from "./server/inbox/inboxRoutes";
 import { getInboxPage, importInboxEmail } from "./server/inboxImportStore";
 import { checkDatabaseConnection } from "./src/persistence/mariadb/database";
 
+const require = createRequire(import.meta.url);
+const { classifyEmailWithOllama } = require("./electron/ollamaEmailClassifier.cjs") as {
+  classifyEmailWithOllama: (
+    input: unknown,
+    options?: {
+      onDiagnostic?: (diagnostic: {
+        level?: "info" | "warn";
+        event?: string;
+        metadata?: Record<string, unknown>;
+      }) => void;
+    },
+  ) => Promise<unknown>;
+};
 const certKeyPath = resolve(__dirname, "certs", "localhost-key.pem");
 const certPath = resolve(__dirname, "certs", "localhost.pem");
 
@@ -97,6 +111,59 @@ function inboxApiPlugin() {
       return;
     }
 
+    if (req.method === "POST" && url.pathname === "/api/ai/classify-email") {
+      try {
+        const rawBody = await readRequestBody(req);
+        const payload = rawBody ? (JSON.parse(rawBody) as unknown) : {};
+        const result = await classifyEmailWithOllama(payload, {
+          onDiagnostic(diagnostic) {
+            const log = diagnostic.level === "warn" ? console.warn : console.info;
+
+            log("[Action Desk AI diagnostics]", diagnostic.event, {
+              context: "/api/ai/classify-email",
+              provider: "ollama",
+              ...(diagnostic.metadata ?? {}),
+            });
+          },
+        });
+
+        res.statusCode = 200;
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify(result));
+      } catch (error) {
+        const statusCode =
+          typeof error === "object" &&
+          error !== null &&
+          "statusCode" in error &&
+          typeof error.statusCode === "number"
+            ? error.statusCode
+            : 503;
+        const code =
+          typeof error === "object" &&
+          error !== null &&
+          "code" in error &&
+          typeof error.code === "string"
+            ? error.code
+            : "ai_unavailable";
+        const message =
+          error instanceof Error
+            ? error.message
+            : "AI classification is unavailable.";
+
+        res.statusCode = statusCode;
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({
+          error: {
+            code,
+            message,
+            retryable: statusCode >= 500,
+            context: "/api/ai/classify-email",
+          },
+        }));
+      }
+      return;
+    }
+
     if (req.method === "GET" && url.pathname === "/api/inbox") {
       try {
         const payload = handleMockInboxRequest(req.url);
@@ -132,6 +199,7 @@ function inboxApiPlugin() {
       url.pathname !== "/api/inbox" &&
       url.pathname !== "/api/inbox/import" &&
       url.pathname !== "/api/inbox/messages" &&
+      url.pathname !== "/api/ai/classify-email" &&
       url.pathname !== "/api/database/health"
     ) {
       next();

@@ -8,6 +8,9 @@ function cloneSnapshot(snapshot: ActionDeskAnalysisSnapshot): ActionDeskAnalysis
     extractedSignals: [...snapshot.extractedSignals],
     priorityReasons: [...snapshot.priorityReasons],
     warnings: [...snapshot.warnings],
+    aiClassification: snapshot.aiClassification
+      ? { ...snapshot.aiClassification }
+      : undefined,
   };
 }
 

@@ -15,6 +15,7 @@ import {
   hasOperationalTimingSignal,
   hasShippingDeadlineRequest,
   isInternalOperationsThread,
+  isVendorSalesOutreach,
 } from "./emailWorkHeuristics";
 import { generateRecommendedAction } from "./generateRecommendedAction";
 import { refineEmailAnalysis } from "./refineEmailAnalysis";
@@ -78,11 +79,40 @@ export function analyzeEmail(email: string): EmailAnalysis {
     hasOperationalTimingSignal: operationalTimingSignal,
   };
 
-  return refineEmailAnalysis(email, analysis);
+  const refinedAnalysis = refineEmailAnalysis(email, analysis);
+
+  return {
+    ...refinedAnalysis,
+    nextAction: generateRecommendedAction({
+      intent: refinedAnalysis.intent,
+      urgency: refinedAnalysis.urgency,
+      risks: refinedAnalysis.risks,
+      orderNumber: refinedAnalysis.orderNumber,
+      caseIdentifiers: refinedAnalysis.caseIdentifiers,
+      hasDeadlineRequest: refinedAnalysis.hasDeadlineRequest,
+      deadlineState: refinedAnalysis.deadlineState,
+      messageType: refinedAnalysis.messageType,
+      actionability: refinedAnalysis.actionability,
+      replyNeeded: refinedAnalysis.replyNeeded,
+      workType: refinedAnalysis.workType,
+      hasConfirmationRequest: refinedAnalysis.hasConfirmationRequest,
+      hasLogisticsContext: refinedAnalysis.hasLogisticsContext,
+      hasOperationalTimingSignal: refinedAnalysis.hasOperationalTimingSignal,
+    }),
+  };
 }
 
 function getIntent(normalizedLatestMessage: string, normalizedEmail: string): IntentCode {
-  const isInternalOperations = isInternalOperationsThread(normalizedLatestMessage);
+  if (
+    isVendorSalesOutreach(normalizedLatestMessage) ||
+    isVendorSalesOutreach(normalizedEmail)
+  ) {
+    return "general_support";
+  }
+
+  const isInternalOperations =
+    isInternalOperationsThread(normalizedLatestMessage) ||
+    isInternalOperationsThread(normalizedEmail);
   const asksForPod =
     normalizedLatestMessage.includes("proof of delivery") ||
     normalizedLatestMessage.includes("pod") ||
@@ -195,7 +225,10 @@ function getUrgency(
   const logisticsContext = hasLogisticsCoordinationSignals(normalizedLatestMessage);
   const operationalTimingSignal = hasOperationalTimingSignal(normalizedLatestMessage);
 
-  if (isInternalOperationsThread(normalizedLatestMessage)) {
+  if (
+    isInternalOperationsThread(normalizedLatestMessage) ||
+    isInternalOperationsThread(normalizedEmail)
+  ) {
     return "low";
   }
 
@@ -252,13 +285,26 @@ function getConfidence(
 }
 
 function getRisks(normalizedLatestMessage: string): RiskCode[] {
-  if (isInternalOperationsThread(normalizedLatestMessage)) {
+  if (
+    isInternalOperationsThread(normalizedLatestMessage) ||
+    isVendorSalesOutreach(normalizedLatestMessage)
+  ) {
     return [];
   }
 
   const risks: RiskCode[] = [];
 
   if (normalizedLatestMessage.includes("waiting for several days") || normalizedLatestMessage.includes("no update")) {
+    risks.push("delay_or_no_tracking_update");
+  }
+
+  if (
+    normalizedLatestMessage.includes("delayed") ||
+    normalizedLatestMessage.includes("delay") ||
+    normalizedLatestMessage.includes("tracking has not moved") ||
+    normalizedLatestMessage.includes("tracking hasn't moved") ||
+    normalizedLatestMessage.includes("no movement")
+  ) {
     risks.push("delay_or_no_tracking_update");
   }
 

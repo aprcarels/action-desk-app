@@ -39,7 +39,7 @@ function generateRecommendedAction({ intent, urgency, risks, orderNumber, caseId
         return "No customer-service reply recommended. Keep this for awareness or route it internally only if follow-up is needed.";
     }
     if (workType === "vendor") {
-        return "This appears to be a vendor or account-maintenance thread. Review internally and reply only if your team intentionally owns the request.";
+        return "No customer-service action needed. Mark not relevant unless an internal owner intentionally wants to review the vendor or sales outreach.";
     }
     if (workType === "internal") {
         return "Internal or awareness-only message. Keep it visible for review only and avoid sending a customer-service reply.";

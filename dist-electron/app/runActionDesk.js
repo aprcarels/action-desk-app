@@ -9,7 +9,9 @@ const orderContextProvider_1 = require("../services/orderContextProvider");
 const refineEmailAnalysis_1 = require("../services/refineEmailAnalysis");
 async function runActionDesk(email, options) {
     const includeReplyDraft = options?.includeReplyDraft ?? true;
-    const { analysis, analysisSource } = await (0, aiService_1.analyzeEmailWithSource)(email);
+    const { analysis, analysisSource, aiClassification } = await (0, aiService_1.analyzeEmailWithSource)(email, {
+        aiInput: options?.aiInput,
+    });
     const refinedAnalysis = (0, refineEmailAnalysis_1.refineEmailAnalysis)(email, analysis);
     const orderContextProvider = (0, orderContextProvider_1.getOrderContextProvider)();
     const fetchedOrderContext = refinedAnalysis.orderNumber
@@ -44,6 +46,7 @@ async function runActionDesk(email, options) {
     return {
         analysis: nextAnalysis,
         analysisSource,
+        aiClassification,
         orderContext,
         replyDraft,
         priorityScore: priorityResult.score,

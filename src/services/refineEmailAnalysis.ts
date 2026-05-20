@@ -21,8 +21,10 @@ import {
   hasOperationalTimingSignal,
   hasShippingDeadlineRequest,
   includesAny,
+  isInternalOperationalReport,
   isInternalOperationsThread,
   isLikelyThreadContinuation,
+  isVendorSalesOutreach,
 } from "./emailWorkHeuristics";
 
 const ALERT_PATTERNS = [
@@ -111,10 +113,15 @@ function getWorkType(options: {
   awarenessOnly: boolean;
   hasExplicitRequest: boolean;
   isInternalOperations: boolean;
+  isVendorSalesOutreach: boolean;
   analysis: EmailAnalysis;
 }): WorkType {
   if (includesAny(options.normalizedEmail, SUSPICIOUS_PATTERNS)) {
     return "suspicious";
+  }
+
+  if (options.isVendorSalesOutreach) {
+    return "vendor";
   }
 
   if (
@@ -346,7 +353,16 @@ function getRefinedSummary(options: {
   messageType: MessageType;
   actionability: Actionability;
   isThreadContinuation: boolean;
+  isInternalOperationalReport: boolean;
 }): string {
+  if (options.analysis.workType === "vendor") {
+    return "Vendor sales outreach or account-maintenance message. Not a customer-service case.";
+  }
+
+  if (options.analysis.workType === "internal" && options.isInternalOperationalReport) {
+    return "Internal operational report. No customer-service reply is needed.";
+  }
+
   if (options.actionability === "no_action_needed") {
     return "Informational message indicates no immediate action is needed.";
   }
@@ -430,17 +446,26 @@ export function refineEmailAnalysis(email: string, analysis: EmailAnalysis): Ema
   const normalizedEmail = fullText.toLowerCase();
   const latestMessageText = extractLatestMessageText(emailText);
   const normalizedLatestMessage = (latestMessageText || fullText).toLowerCase();
+  const vendorSalesOutreach =
+    isVendorSalesOutreach(normalizedLatestMessage) ||
+    isVendorSalesOutreach(normalizedEmail);
   const likelyAutomatedAlert = includesAny(normalizedEmail, ALERT_PATTERNS);
   const noActionNeeded =
     normalizedLatestMessage.includes("no action needed") ||
     normalizedLatestMessage.includes("no action required") ||
     normalizedLatestMessage.includes("do not reply");
-  const hasExplicitRequest = hasClearRequest(normalizedLatestMessage);
+  const hasExplicitRequest =
+    !vendorSalesOutreach && hasClearRequest(normalizedLatestMessage);
   const awarenessOnly =
     includesAny(normalizedLatestMessage, AWARENESS_PATTERNS) && !hasExplicitRequest;
   const informational = awarenessOnly || normalizedLatestMessage.includes("for your information");
   const isThreadContinuation = isLikelyThreadContinuation(latestMessageText, emailText);
-  const isInternalOperations = isInternalOperationsThread(normalizedLatestMessage);
+  const internalOperationalReport =
+    isInternalOperationalReport(normalizedLatestMessage) ||
+    isInternalOperationalReport(normalizedEmail);
+  const isInternalOperations =
+    isInternalOperationsThread(normalizedLatestMessage) ||
+    isInternalOperationsThread(normalizedEmail);
   const confirmationRequest = hasConfirmationRequest(normalizedLatestMessage);
   const logisticsContext = hasLogisticsCoordinationSignals(normalizedLatestMessage);
   const operationalTimingSignal =
@@ -449,13 +474,17 @@ export function refineEmailAnalysis(email: string, analysis: EmailAnalysis): Ema
   const alertLikeStatusRequest =
     (likelyAutomatedAlert || isInternalOperations || isThreadContinuation) &&
     (analysisWithIdentifiers.intent === "where_is_my_order" || analysisWithIdentifiers.intent === "general_support");
-  const refinedIntent = alertLikeStatusRequest ? "general_support" : analysisWithIdentifiers.intent;
+  const refinedIntent =
+    vendorSalesOutreach || alertLikeStatusRequest
+      ? "general_support"
+      : analysisWithIdentifiers.intent;
   const workType = getWorkType({
     normalizedEmail,
     likelyAutomatedAlert,
     awarenessOnly,
     hasExplicitRequest,
     isInternalOperations,
+    isVendorSalesOutreach: vendorSalesOutreach,
     analysis: {
       ...analysisWithIdentifiers,
       intent: refinedIntent,
@@ -503,10 +532,12 @@ export function refineEmailAnalysis(email: string, analysis: EmailAnalysis): Ema
     hasOperationalTimingSignal: operationalTimingSignal,
   });
 
-  const refinedRisks = Array.from(new Set([
-    ...analysisWithIdentifiers.risks,
-    ...(includesAny(normalizedEmail, FRUSTRATION_PATTERNS) ? ["customer_frustration" as const] : []),
-  ]));
+  const refinedRisks = vendorSalesOutreach
+    ? []
+    : Array.from(new Set([
+        ...analysisWithIdentifiers.risks,
+        ...(includesAny(normalizedEmail, FRUSTRATION_PATTERNS) ? ["customer_frustration" as const] : []),
+      ]));
 
   return {
     ...analysisWithIdentifiers,
@@ -528,12 +559,14 @@ export function refineEmailAnalysis(email: string, analysis: EmailAnalysis): Ema
         ...analysisWithIdentifiers,
         intent: refinedIntent,
         urgency,
+        workType,
         hasClearRequest: hasExplicitRequest,
         isThreadContinuation,
       },
       messageType,
       actionability,
       isThreadContinuation,
+      isInternalOperationalReport: internalOperationalReport,
     }),
     messageType,
     actionability,

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  classifyEmailWithAi,
   createOutlookReplyDraft,
   createSharedWorkflowBackup,
   getSharedWorkflowErrorMessage,
@@ -7,11 +8,14 @@ import {
   loadSharedWorkflowBootstrap,
   loadSharedWorkflowHealth,
   saveSharedWorkflowPreferences,
+  setBackendApiOrigin,
 } from "./sharedWorkflowApi";
 
 describe("sharedWorkflowApi", () => {
   afterEach(() => {
+    setBackendApiOrigin(null);
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
     vi.restoreAllMocks();
   });
 
@@ -125,9 +129,12 @@ describe("sharedWorkflowApi", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
+    const liveReplyDraft =
+      "Hi Casey,\n\nThis is the live Action Desk generated reply.\nLine two stays on its own line.\n\nBest,\nSupport Team";
+
     const draft = await createOutlookReplyDraft({
       messageId: "msg-1",
-      replyText: "Reply draft",
+      replyText: liveReplyDraft,
     });
 
     const [requestUrl, requestInit] = fetchMock.mock.calls[0] ?? [];
@@ -144,7 +151,45 @@ describe("sharedWorkflowApi", () => {
     expect(headers["x-action-desk-session-id"]).toBe("session-draft");
     expect(JSON.parse(String(requestInit?.body))).toEqual({
       messageId: "msg-1",
-      replyText: "Reply draft",
+      replyText: liveReplyDraft,
+    });
+    expect(String(requestInit?.body)).not.toContain("Reply draft");
+  });
+
+  it("sends AI classification to the configured backend API route", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        category: "vendor sales outreach",
+        actionable: false,
+        urgency: "low",
+        summary: "Vendor is pitching hardware and asking for a call.",
+        confidence: 0.91,
+        aiSource: "ollama",
+      }),
+    });
+
+    setBackendApiOrigin("http://192.168.15.177:4000/");
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await classifyEmailWithAi({
+      subject: "RE: AP Express Logistics priorities",
+      from: "casey@duagon.example",
+      body: "Would AP Express be open to a quick chat?",
+    });
+    const [requestUrl, requestInit] = fetchMock.mock.calls[0] ?? [];
+    const url = new URL(String(requestUrl));
+
+    expect(result).toMatchObject({
+      category: "vendor sales outreach",
+      aiSource: "ollama",
+    });
+    expect(url.origin).toBe("http://192.168.15.177:4000");
+    expect(url.pathname).toBe("/api/ai/classify-email");
+    expect(requestInit?.method).toBe("POST");
+    expect(JSON.parse(String(requestInit?.body))).toMatchObject({
+      subject: "RE: AP Express Logistics priorities",
+      from: "casey@duagon.example",
     });
   });
 

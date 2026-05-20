@@ -115,6 +115,7 @@ import {
   saveSharedSlaSettings,
   saveSharedThreadState,
   saveSharedWorkflowPreferences,
+  setBackendApiOrigin,
   setSharedApiOrigin,
   signInSharedWorkflow,
   signOutSharedWorkflow,
@@ -125,6 +126,10 @@ import {
   upsertSharedThreadPresence,
   clearSharedThreadPresence,
 } from "./services/sharedWorkflowApi";
+import {
+  getOutlookReplyDraftText,
+  hasOutlookReplyDraftText,
+} from "./services/outlookDraftContent";
 import {
   getActiveThreadPresence,
   getPresenceConflictWarning,
@@ -2202,6 +2207,7 @@ export default function App() {
 
           if (!cancelled) {
             setDesktopRuntimeInfo(info);
+            setBackendApiOrigin(info.actionDeskApiUrl ?? undefined);
             setSharedApiOrigin(info.apiOrigin ?? undefined);
           }
         } catch (error) {
@@ -2678,7 +2684,18 @@ export default function App() {
       );
 
       try {
-        const nextResult = await runActionDesk(buildAnalysisInput(failedItem.email));
+        const nextResult = await runActionDesk(
+          buildAnalysisInput(failedItem.email),
+          {
+            aiInput: {
+              subject: failedItem.email.subject,
+              from: [failedItem.email.senderName, failedItem.email.senderEmail]
+                .filter(Boolean)
+                .join(" "),
+              body: failedItem.email.body,
+            },
+          },
+        );
         const nextProcessedItem = createProcessedEmail(
           failedItem.email,
           nextResult,
@@ -3270,8 +3287,8 @@ export default function App() {
     const selectedPilotState = selectedItem
       ? getPilotItemStateForEmail(pilotItemStates, selectedItem.email.id)
       : undefined;
-    const selectedReplyDraft = selectedItem?.result?.replyDraft.trim() ?? "";
-    const hasReplyDraft = selectedReplyDraft.length > 0;
+    const selectedReplyDraft = getOutlookReplyDraftText(selectedItem);
+    const hasReplyDraft = hasOutlookReplyDraftText(selectedReplyDraft);
     const selectedOutlookDraftMessageId = getOutlookReplyDraftMessageId(selectedItem);
     const canCreateOutlookDraft = Boolean(
       desktopRuntimeInfo?.isElectron &&

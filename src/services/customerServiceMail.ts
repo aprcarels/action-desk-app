@@ -4,8 +4,10 @@ import {
   getDeadlineState,
   hasClearRequest,
   includesAny,
+  isInternalOperationalReport,
   isInternalOperationsThread,
   isLikelyThreadContinuation,
+  isVendorSalesOutreach,
 } from "./emailWorkHeuristics";
 import { generateRecommendedAction } from "./generateRecommendedAction";
 import { generateReply } from "./generateReply";
@@ -203,6 +205,10 @@ const SYSTEM_REPORT_SENDER_PATTERNS = [
   "scheduledreports@",
 ];
 
+function isInternalSender(senderEmail: string): boolean {
+  return senderEmail.endsWith("@apexpress.com");
+}
+
 function normalizeEmailText(email: EmailItem): string {
   return [email.subject, email.previewText, email.body]
     .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
@@ -336,25 +342,44 @@ export function classifyWorkType(
     latestMessageText,
     email.body || "",
   );
-  const internalOperations = isInternalOperationsThread(normalizedLatestMessage);
+  const internalOperationalReport =
+    isInternalOperationalReport(normalizedLatestMessage) ||
+    isInternalOperationalReport(normalizedText);
+  const internalOperations =
+    isInternalOperationsThread(normalizedLatestMessage) ||
+    isInternalOperationsThread(normalizedText);
 
   const system =
     isLowValueSystemReportEmail(email) ||
     includesAny(normalizedLatestMessage, SYSTEM_PATTERNS) ||
     SYSTEM_SENDER_PATTERNS.some((pattern) => sender.includes(pattern));
 
+  const vendorSalesOutreach =
+    isVendorSalesOutreach(normalizedLatestMessage) ||
+    isVendorSalesOutreach(normalizedText);
+
   const vendor =
-    includesAny(normalizedLatestMessage, VENDOR_PATTERNS) &&
+    (vendorSalesOutreach || includesAny(normalizedLatestMessage, VENDOR_PATTERNS)) &&
     !hasDirectCustomerSignals(normalizedLatestMessage, analysis) &&
     !hasTextOrderIdentifier(normalizedLatestMessage);
 
   const internal =
     includesAny(normalizedLatestMessage, INTERNAL_PATTERNS) ||
     internalOperations ||
+    internalOperationalReport ||
+    (isInternalSender(sender) && internalOperationalReport) ||
     (threadContinuation && !hasClearRequest(normalizedLatestMessage));
 
   if (suspicious) {
     return "suspicious";
+  }
+
+  if (vendorSalesOutreach) {
+    return "vendor";
+  }
+
+  if (internalOperationalReport && !hasClearRequest(normalizedLatestMessage)) {
+    return "internal";
   }
 
   if (system) {
@@ -394,9 +419,9 @@ function createSuppressedAnalysis(
       : workType === "system"
         ? "System, calendar, or automated administrative message. Not a customer-service case."
         : workType === "vendor"
-          ? "Vendor or account-maintenance thread. Review internally only if your team owns it."
+          ? "Vendor sales outreach or account-maintenance thread. Not a customer-service case."
           : workType === "internal"
-            ? "Internal or awareness-only message. Keep for review, not for customer-service follow-up."
+            ? "Internal operational report or awareness-only message. Keep for review, not for customer-service follow-up."
             : "This message is not clearly a customer-service case and should be reviewed before any reply.";
   const nextAction =
     workType === "suspicious"
@@ -404,9 +429,9 @@ function createSuppressedAnalysis(
       : workType === "system"
         ? "No customer-service reply recommended. Keep for awareness or route to the appropriate internal owner if follow-up is needed."
         : workType === "vendor"
-          ? "Review internally as a vendor or account-maintenance thread. Reply only if your team intentionally owns the request."
+          ? "No customer-service action needed. Mark not relevant unless an internal owner intentionally wants to review the vendor outreach."
           : workType === "internal"
-            ? "Keep this for internal awareness or review only. Do not send a customer-service reply unless a clear customer action is requested."
+            ? "No customer-service reply recommended. Keep this for internal awareness or review only unless a clear customer action is requested."
             : "Review first and confirm whether this belongs in customer service before replying or taking action.";
 
   return {
@@ -512,6 +537,9 @@ export function shouldShowInCustomerServiceQueue(item: ProcessedEmail): boolean 
     hasDirectCustomerSignals(fullText, analysis);
   const hasActionableCustomerAsk =
     hasActionableRequestSignals(latestMessageText, analysis);
+  const internalOperationalReport =
+    isInternalOperationalReport(latestMessageText) ||
+    isInternalOperationalReport(fullText);
   const isContinuationWithoutAsk =
     analysis.isThreadContinuation === true &&
     !analysis.hasClearRequest &&
@@ -530,6 +558,10 @@ export function shouldShowInCustomerServiceQueue(item: ProcessedEmail): boolean 
   }
 
   if (analysis.workType === "internal") {
+    if (internalOperationalReport && !hasActionableCustomerAsk) {
+      return false;
+    }
+
     return hasDirectCustomerContext || hasActionableCustomerAsk;
   }
 

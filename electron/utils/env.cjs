@@ -12,6 +12,10 @@ const RUNTIME_ENV_CONFIG_KEYS = [
   "VITE_AZURE_CLIENT_ID",
   "VITE_AZURE_TENANT_ID",
   "VITE_AZURE_AUTHORITY",
+  "ACTION_DESK_AI_ENABLED",
+  "OLLAMA_BASE_URL",
+  "OLLAMA_MODEL",
+  "OLLAMA_TIMEOUT_MS",
 ];
 
 function addEnvCandidate(candidatePaths, envPath) {

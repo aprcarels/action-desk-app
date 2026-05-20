@@ -5,9 +5,11 @@ import { generateRecommendedAction } from "../services/generateRecommendedAction
 import { generateReply } from "../services/generateReply";
 import { getOrderContextProvider } from "../services/orderContextProvider";
 import { refineEmailAnalysis } from "../services/refineEmailAnalysis";
+import type { AiClassifyEmailRequest } from "../services/aiEmailClassification";
 
 type RunActionDeskOptions = {
   includeReplyDraft?: boolean;
+  aiInput?: Partial<AiClassifyEmailRequest>;
 };
 
 export async function runActionDesk(
@@ -16,7 +18,10 @@ export async function runActionDesk(
 ): Promise<ActionDeskResult> {
   const includeReplyDraft = options?.includeReplyDraft ?? true;
 
-  const { analysis, analysisSource } = await analyzeEmailWithSource(email);
+  const { analysis, analysisSource, aiClassification } =
+    await analyzeEmailWithSource(email, {
+      aiInput: options?.aiInput,
+    });
   const refinedAnalysis = refineEmailAnalysis(email, analysis);
 
   const orderContextProvider = getOrderContextProvider();
@@ -57,6 +62,7 @@ export async function runActionDesk(
   return {
     analysis: nextAnalysis,
     analysisSource,
+    aiClassification,
     orderContext,
     replyDraft,
     priorityScore: priorityResult.score,

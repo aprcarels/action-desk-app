@@ -64,6 +64,11 @@ class QueueManager {
             body: message.bodyText ?? message.bodyPreview ?? "",
         }), {
             includeReplyDraft: false,
+            aiInput: {
+                subject: message.subject,
+                from: [message.fromName, message.fromEmail].filter(Boolean).join(" "),
+                body: message.bodyText ?? message.bodyPreview ?? "",
+            },
         });
         const snapshot = (0, mapActionDeskResultToAnalysisSnapshot_1.mapActionDeskResultToAnalysisSnapshot)({
             queueItemId,
@@ -112,6 +117,13 @@ class QueueManager {
             body: reprocessMessage.bodyText ?? reprocessMessage.bodyPreview ?? "",
         }), {
             includeReplyDraft: false,
+            aiInput: {
+                subject: reprocessMessage.subject,
+                from: [reprocessMessage.fromName, reprocessMessage.fromEmail]
+                    .filter(Boolean)
+                    .join(" "),
+                body: reprocessMessage.bodyText ?? reprocessMessage.bodyPreview ?? "",
+            },
         });
         const snapshot = (0, mapActionDeskResultToAnalysisSnapshot_1.mapActionDeskResultToAnalysisSnapshot)({
             queueItemId: existingItem.queueItemId,

@@ -8,6 +8,7 @@ import { CollapsibleSection } from "./CollapsibleSection";
 import { InternalNotesPanel } from "./InternalNotesPanel";
 import { ReplyLogPanel } from "./ReplyLogPanel";
 import { getIntentLabel, getRiskLabel } from "../services/analysisTaxonomy";
+import { formatAiConfidence } from "../services/aiEmailClassification";
 import { getWorkTypeLabel } from "../services/customerServiceMail";
 import {
   getAnalysisSourceDisclosure,
@@ -105,6 +106,7 @@ export function ThreadConversationView({
   const draftIssueType = deriveIssueType(result.analysis, result.orderContext);
   const analysisSourceDisclosure = getAnalysisSourceDisclosure(result.analysisSource);
   const draftSourceDisclosure = getDraftSourceDisclosure(result.analysisSource);
+  const aiClassification = result.aiClassification;
   const olderMessages = thread.items.filter((threadItem) => threadItem.email.id !== item.email.id);
   const replyDraftUnavailable =
     !hasReplyDraft &&
@@ -211,6 +213,21 @@ export function ThreadConversationView({
             <p style={eyebrowStyle}>Triage Summary</p>
             <p style={bodyTextStyle}>{result.analysis.summary || "No summary available."}</p>
           </div>
+
+          {aiClassification && (
+            <div style={assistiveAiCardStyle}>
+              <p style={{ ...eyebrowStyle, color: "#1d4ed8" }}>AI Assisted</p>
+              <p style={bodyTextStyle}>
+                {aiClassification.category} | {formatAiConfidence(aiClassification.confidence)} confidence
+              </p>
+              <p style={{ ...bodyTextStyle, marginTop: "6px" }}>
+                {aiClassification.summary}
+              </p>
+              <p style={assistiveAiFootnoteStyle}>
+                Assistive only. Action Desk rules remain authoritative.
+              </p>
+            </div>
+          )}
 
           <div style={recommendationCardStyle}>
             <div style={recommendationHeaderStyle}>
@@ -565,6 +582,20 @@ const analysisCardStyle: React.CSSProperties = {
   borderRadius: "14px",
   backgroundColor: "#f8fafc",
   padding: "16px",
+};
+
+const assistiveAiCardStyle: React.CSSProperties = {
+  border: "1px solid #bfdbfe",
+  borderRadius: "14px",
+  backgroundColor: "#f8fbff",
+  padding: "14px 16px",
+};
+
+const assistiveAiFootnoteStyle: React.CSSProperties = {
+  margin: "8px 0 0",
+  fontSize: "12px",
+  lineHeight: 1.5,
+  color: "#475569",
 };
 
 const recommendationCardStyle: React.CSSProperties = {

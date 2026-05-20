@@ -1,6 +1,7 @@
 import type {
   AppCapability,
   AuthSession,
+  AiEmailClassification,
   ManagedUser,
   ManagedUserDraft,
   ProcessedEmail,
@@ -14,6 +15,8 @@ import type {
   WorkflowPreferences,
   WorkflowState,
 } from "../types/actionDesk";
+import type { AiClassifyEmailRequest } from "./aiEmailClassification";
+import { getEnv } from "../utils/env";
 import {
   normalizeManagedUsers,
   normalizeRepProfile,
@@ -58,6 +61,7 @@ let sharedApiOrigin =
       ? "http://localhost:3960"
       : window.location.origin
     : "http://localhost:3960";
+let configuredBackendApiOrigin: string | null = null;
 
 function getSessionId(): string {
   if (typeof window === "undefined") {
@@ -111,6 +115,28 @@ function createSharedWorkflowError(input: {
   error.context = input.context;
   error.details = input.details;
   return error;
+}
+
+function normalizeApiOrigin(value?: string | null): string | null {
+  const normalized = String(value ?? "").trim().replace(/\/+$/, "");
+
+  if (!normalized) {
+    return null;
+  }
+
+  try {
+    return new URL(normalized).origin;
+  } catch {
+    return null;
+  }
+}
+
+function getConfiguredBackendApiOrigin(): string | null {
+  return (
+    configuredBackendApiOrigin ??
+    normalizeApiOrigin(getEnv("ACTION_DESK_API_URL")) ??
+    normalizeApiOrigin(getEnv("VITE_ACTION_DESK_API_URL"))
+  );
 }
 
 async function parseErrorResponse(response: Response): Promise<SharedWorkflowApiError> {
@@ -193,10 +219,55 @@ async function requestJson<T>(
   return response.json() as Promise<T>;
 }
 
+async function requestJsonFromOrigin<T>(
+  origin: string,
+  pathname: string,
+  options?: {
+    method?: "GET" | "POST" | "PATCH";
+    body?: unknown;
+    includeSessionHeader?: boolean;
+  },
+): Promise<T> {
+  const url = new URL(pathname, origin);
+
+  let response: Response;
+
+  try {
+    response = await fetch(url, {
+      method: options?.method ?? "GET",
+      headers: {
+        "Content-Type": "application/json",
+        ...(options?.includeSessionHeader
+          ? { "x-action-desk-session-id": getSessionId() }
+          : {}),
+      },
+      body: options?.body ? JSON.stringify(options.body) : undefined,
+    });
+  } catch (error) {
+    throw createSharedWorkflowError({
+      code: "network_error",
+      message: "The configured Action Desk backend could not be reached.",
+      retryable: true,
+      context: pathname,
+      details: error instanceof Error ? error.message : String(error),
+    });
+  }
+
+  if (!response.ok) {
+    throw await parseErrorResponse(response);
+  }
+
+  return response.json() as Promise<T>;
+}
+
 export function setSharedApiOrigin(nextOrigin?: string | null) {
   if (nextOrigin?.trim()) {
     sharedApiOrigin = nextOrigin;
   }
+}
+
+export function setBackendApiOrigin(nextOrigin?: string | null) {
+  configuredBackendApiOrigin = normalizeApiOrigin(nextOrigin);
 }
 
 export function getSharedSessionExpiredEventName() {
@@ -288,6 +359,24 @@ export async function loadSharedWorkflowHealth(): Promise<{
   serverTime: string;
 }> {
   return requestJson("/api/health");
+}
+
+export async function classifyEmailWithAi(
+  input: AiClassifyEmailRequest,
+): Promise<AiEmailClassification> {
+  const backendOrigin = getConfiguredBackendApiOrigin();
+
+  if (backendOrigin) {
+    return requestJsonFromOrigin(backendOrigin, "/api/ai/classify-email", {
+      method: "POST",
+      body: input,
+    });
+  }
+
+  return requestJson("/api/ai/classify-email", {
+    method: "POST",
+    body: input,
+  });
 }
 
 export async function createSharedTestQueueData(): Promise<{

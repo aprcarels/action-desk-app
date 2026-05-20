@@ -14,6 +14,7 @@ import {
   isSuppressibleSystemReportMissingBodyFailure,
   isSystemReportEmailItem,
 } from "../services/systemReportEmail";
+import { formatAiConfidence } from "../services/aiEmailClassification";
 import type {
   AssignmentReason,
   WorkflowThread,
@@ -82,6 +83,7 @@ export function ThreadedQueueCard({
 }: ThreadedQueueCardProps) {
   const representativeItem = thread.representativeItem;
   const analysis = representativeItem.result?.analysis;
+  const aiClassification = representativeItem.result?.aiClassification;
   const analysisSourceDisclosure = getAnalysisSourceDisclosure(
     representativeItem.result?.analysisSource,
   );
@@ -307,6 +309,14 @@ export function ThreadedQueueCard({
               <span title={analysisSourceDisclosure.detail} style={badgeStyle}>
                 {analysisSourceDisclosure.label}
               </span>
+              {aiClassification && (
+                <span
+                  title="Assistive only. Action Desk rules remain authoritative."
+                  style={badgeStyle}
+                >
+                  AI: {aiClassification.category} ({formatAiConfidence(aiClassification.confidence)})
+                </span>
+              )}
             </>
           )}
           <span

@@ -14,6 +14,7 @@ import {
 } from "../services/sla";
 import { getPriorityExplanationReasons } from "../services/priorityExplanation";
 import { getAnalysisSourceDisclosure } from "../services/sourceDisclosure";
+import { formatAiConfidence } from "../services/aiEmailClassification";
 import type {
   AssignmentReason,
   PilotQueueItemState,
@@ -160,6 +161,7 @@ export function ContextPanel({
   const analysisSourceDisclosure = getAnalysisSourceDisclosure(
     item.result?.analysisSource,
   );
+  const aiClassification = item.result?.aiClassification;
 
   return (
     <aside
@@ -420,6 +422,12 @@ export function ContextPanel({
               </span>
             }
           />
+          {aiClassification && (
+            <Field
+              label="AI Assisted"
+              value={`${aiClassification.category} | ${formatAiConfidence(aiClassification.confidence)} confidence`}
+            />
+          )}
           <Field label="Intent" value={getIntentLabel(item.result?.analysis.intent ?? "general_support")} emphasized={true} />
           <Field label="Urgency" value={item.result?.analysis.urgency ?? "Unknown"} />
           <Field

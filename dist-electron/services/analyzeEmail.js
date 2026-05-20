@@ -61,10 +61,34 @@ function analyzeEmail(email) {
         hasLogisticsContext: logisticsContext,
         hasOperationalTimingSignal: operationalTimingSignal,
     };
-    return (0, refineEmailAnalysis_1.refineEmailAnalysis)(email, analysis);
+    const refinedAnalysis = (0, refineEmailAnalysis_1.refineEmailAnalysis)(email, analysis);
+    return {
+        ...refinedAnalysis,
+        nextAction: (0, generateRecommendedAction_1.generateRecommendedAction)({
+            intent: refinedAnalysis.intent,
+            urgency: refinedAnalysis.urgency,
+            risks: refinedAnalysis.risks,
+            orderNumber: refinedAnalysis.orderNumber,
+            caseIdentifiers: refinedAnalysis.caseIdentifiers,
+            hasDeadlineRequest: refinedAnalysis.hasDeadlineRequest,
+            deadlineState: refinedAnalysis.deadlineState,
+            messageType: refinedAnalysis.messageType,
+            actionability: refinedAnalysis.actionability,
+            replyNeeded: refinedAnalysis.replyNeeded,
+            workType: refinedAnalysis.workType,
+            hasConfirmationRequest: refinedAnalysis.hasConfirmationRequest,
+            hasLogisticsContext: refinedAnalysis.hasLogisticsContext,
+            hasOperationalTimingSignal: refinedAnalysis.hasOperationalTimingSignal,
+        }),
+    };
 }
 function getIntent(normalizedLatestMessage, normalizedEmail) {
-    const isInternalOperations = (0, emailWorkHeuristics_1.isInternalOperationsThread)(normalizedLatestMessage);
+    if ((0, emailWorkHeuristics_1.isVendorSalesOutreach)(normalizedLatestMessage) ||
+        (0, emailWorkHeuristics_1.isVendorSalesOutreach)(normalizedEmail)) {
+        return "general_support";
+    }
+    const isInternalOperations = (0, emailWorkHeuristics_1.isInternalOperationsThread)(normalizedLatestMessage) ||
+        (0, emailWorkHeuristics_1.isInternalOperationsThread)(normalizedEmail);
     const asksForPod = normalizedLatestMessage.includes("proof of delivery") ||
         normalizedLatestMessage.includes("pod") ||
         normalizedLatestMessage.includes("delivery receipt");
@@ -150,7 +174,8 @@ function getUrgency(normalizedLatestMessage, normalizedEmail) {
     const confirmationRequest = (0, emailWorkHeuristics_1.hasConfirmationRequest)(normalizedLatestMessage);
     const logisticsContext = (0, emailWorkHeuristics_1.hasLogisticsCoordinationSignals)(normalizedLatestMessage);
     const operationalTimingSignal = (0, emailWorkHeuristics_1.hasOperationalTimingSignal)(normalizedLatestMessage);
-    if ((0, emailWorkHeuristics_1.isInternalOperationsThread)(normalizedLatestMessage)) {
+    if ((0, emailWorkHeuristics_1.isInternalOperationsThread)(normalizedLatestMessage) ||
+        (0, emailWorkHeuristics_1.isInternalOperationsThread)(normalizedEmail)) {
         return "low";
     }
     if (LOW_URGENCY_KEYWORDS.some((keyword) => normalizedLatestMessage.includes(keyword)) &&
@@ -191,11 +216,19 @@ function getConfidence(intent, orderNumber) {
     return "low";
 }
 function getRisks(normalizedLatestMessage) {
-    if ((0, emailWorkHeuristics_1.isInternalOperationsThread)(normalizedLatestMessage)) {
+    if ((0, emailWorkHeuristics_1.isInternalOperationsThread)(normalizedLatestMessage) ||
+        (0, emailWorkHeuristics_1.isVendorSalesOutreach)(normalizedLatestMessage)) {
         return [];
     }
     const risks = [];
     if (normalizedLatestMessage.includes("waiting for several days") || normalizedLatestMessage.includes("no update")) {
+        risks.push("delay_or_no_tracking_update");
+    }
+    if (normalizedLatestMessage.includes("delayed") ||
+        normalizedLatestMessage.includes("delay") ||
+        normalizedLatestMessage.includes("tracking has not moved") ||
+        normalizedLatestMessage.includes("tracking hasn't moved") ||
+        normalizedLatestMessage.includes("no movement")) {
         risks.push("delay_or_no_tracking_update");
     }
     if (normalizedLatestMessage.includes("frustrated")) {

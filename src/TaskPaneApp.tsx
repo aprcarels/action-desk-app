@@ -4,6 +4,7 @@ import { useOutlookShellContext } from "./office/useOutlookShellContext";
 import { getIntentLabel, getRiskLabel } from "./services/analysisTaxonomy";
 import { buildAnalysisInput } from "./services/analysisInput";
 import { cleanEmailText } from "./services/cleanEmailText";
+import { formatAiConfidence } from "./services/aiEmailClassification";
 import {
   getAnalysisSourceDisclosure,
   getDraftSourceDisclosure,
@@ -45,7 +46,13 @@ export default function TaskPaneApp() {
       setTaskPaneState({ status: "loading" });
 
       try {
-        const result = await runActionDesk(analysisInput);
+        const result = await runActionDesk(analysisInput, {
+          aiInput: {
+            subject: cleanEmailText(emailSubject),
+            from: currentEmailContext?.from ?? "",
+            body: cleanedEmailBody,
+          },
+        });
 
         if (!isMounted) {
           return;
@@ -352,6 +359,13 @@ export default function TaskPaneApp() {
               <p style={textStyle}>
                 {taskPaneState.result.analysis.summary || "No summary available."}
               </p>
+              {taskPaneState.result.aiClassification && (
+                <p style={textStyle}>
+                  AI Assisted: {taskPaneState.result.aiClassification.category} |{" "}
+                  {formatAiConfidence(taskPaneState.result.aiClassification.confidence)} confidence.
+                  Assistive only; rules remain authoritative.
+                </p>
+              )}
             </div>
 
             <div style={cardStyle}>

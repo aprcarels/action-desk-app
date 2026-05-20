@@ -523,7 +523,15 @@ export async function processEmails(
       try {
         const normalizedEmail = normalizeEmailForProcessing(email);
         assertEmailCanBeAnalyzed(normalizedEmail);
-        const result = await runActionDesk(getAnalysisInput(normalizedEmail));
+        const result = await runActionDesk(getAnalysisInput(normalizedEmail), {
+          aiInput: {
+            subject: normalizedEmail.subject,
+            from: [normalizedEmail.senderName, normalizedEmail.senderEmail]
+              .filter(Boolean)
+              .join(" "),
+            body: normalizedEmail.body,
+          },
+        });
         return applyBackendCustomerContext(
           createProcessedEmail(normalizedEmail, result),
           customers,
@@ -562,7 +570,15 @@ export async function processEmailsProgressively(
       try {
         const normalizedEmail = normalizeEmailForProcessing(email);
         assertEmailCanBeAnalyzed(normalizedEmail);
-        const result = await runActionDesk(getAnalysisInput(normalizedEmail));
+        const result = await runActionDesk(getAnalysisInput(normalizedEmail), {
+          aiInput: {
+            subject: normalizedEmail.subject,
+            from: [normalizedEmail.senderName, normalizedEmail.senderEmail]
+              .filter(Boolean)
+              .join(" "),
+            body: normalizedEmail.body,
+          },
+        });
         const processedItem = applyBackendCustomerContext(
           createProcessedEmail(normalizedEmail, result),
           options?.customers,

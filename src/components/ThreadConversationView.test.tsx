@@ -8,6 +8,7 @@ import type {
   ProcessedEmail,
   WorkflowThread,
 } from "../types/actionDesk";
+import { getOutlookReplyDraftText } from "../services/outlookDraftContent";
 
 function buildResult(
   overrides: Partial<ActionDeskResult> = {},
@@ -176,6 +177,29 @@ describe("ThreadConversationView source disclosure", () => {
     expect(markup).not.toContain("AI Generated");
   });
 
+  it("shows assistive AI classification with confidence separately from rules output", () => {
+    const item = buildProcessedEmail(
+      buildResult({
+        analysisSource: "hybrid",
+        aiClassification: {
+          category: "order/shipment issue",
+          actionable: true,
+          urgency: "medium",
+          summary: "Customer is asking for current shipment status.",
+          confidence: 0.86,
+          aiSource: "ollama",
+        },
+      }),
+    );
+    const markup = renderConversation(item);
+
+    expect(markup).toContain("Analysis: AI Assisted");
+    expect(markup).toContain("Draft: Rules-Based");
+    expect(markup).toContain("AI Assisted");
+    expect(markup).toContain("order/shipment issue | 86% confidence");
+    expect(markup).toContain("Assistive only. Action Desk rules remain authoritative.");
+  });
+
   it("shows the combined copy and open action when an exact Outlook link is available", () => {
     const markup = renderConversation(buildProcessedEmail(), {
       canOpenOutlook: true,
@@ -195,5 +219,18 @@ describe("ThreadConversationView source disclosure", () => {
     });
 
     expect(markup).toContain("Create Outlook Draft");
+  });
+
+  it("renders the same live reply draft text used for Outlook draft creation", () => {
+    const liveReplyDraft =
+      "Hi Casey,\n\nThis is the live Action Desk generated reply.\nLine two stays on its own line.\n\nBest,\nSupport Team";
+    const item = buildProcessedEmail(buildResult({ replyDraft: liveReplyDraft }));
+    const markup = renderConversation(item, {
+      canCreateOutlookDraft: true,
+    });
+
+    expect(markup).toContain(liveReplyDraft);
+    expect(getOutlookReplyDraftText(item)).toBe(liveReplyDraft);
+    expect(getOutlookReplyDraftText(item)).not.toContain("Reply draft");
   });
 });

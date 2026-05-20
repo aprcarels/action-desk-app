@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   extractLatestMessageText,
   hasClearRequest,
+  isInternalOperationalReport,
   isLikelyThreadContinuation,
+  isVendorSalesOutreach,
 } from "./emailWorkHeuristics";
 
 describe("emailWorkHeuristics", () => {
@@ -36,5 +38,38 @@ describe("emailWorkHeuristics", () => {
 
     expect(isLikelyThreadContinuation(latestMessage, email)).toBe(true);
     expect(hasClearRequest(latestMessage)).toBe(false);
+  });
+
+  it("detects vendor sales outreach without blocking real customer shipment asks", () => {
+    const salesOutreach = [
+      "Most IT teams recover less than half of devices after offboarding.",
+      "Unduit helps companies reach a 98% recovery rate and simplify new hire deployment.",
+      "Can I show you what it looks like for your IT?",
+    ].join(" ");
+    const customerAsk =
+      "Hi support, can you send the shipment status for order ORD-1002? The tracking number has not updated.";
+
+    expect(isVendorSalesOutreach(salesOutreach)).toBe(true);
+    expect(isVendorSalesOutreach(customerAsk)).toBe(false);
+  });
+
+  it("detects industrial hardware vendor outreach as sales outreach", () => {
+    const duagonOutreach = [
+      "Duagon builds made in America hardware for railroad environments where durability matters.",
+      "I am a Technical Sales Manager and wanted to see if AP Express is open to a quick chat.",
+    ].join(" ");
+
+    expect(isVendorSalesOutreach(duagonOutreach)).toBe(true);
+  });
+
+  it("detects internal EOD operational reports without treating tracking words as customer asks", () => {
+    const eodReport = [
+      "EQISMART - EOD 05-19-26",
+      "All orders are on track. Tracking numbers are in Excel.",
+      "Some orders are rolling over to process tomorrow.",
+    ].join("\n");
+
+    expect(isInternalOperationalReport(eodReport)).toBe(true);
+    expect(hasClearRequest(eodReport)).toBe(false);
   });
 });

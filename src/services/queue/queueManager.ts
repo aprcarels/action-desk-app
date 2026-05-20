@@ -110,6 +110,11 @@ export class QueueManager {
       }),
       {
         includeReplyDraft: false,
+        aiInput: {
+          subject: message.subject,
+          from: [message.fromName, message.fromEmail].filter(Boolean).join(" "),
+          body: message.bodyText ?? message.bodyPreview ?? "",
+        },
       },
     );
 
@@ -175,6 +180,13 @@ export class QueueManager {
       }),
       {
         includeReplyDraft: false,
+        aiInput: {
+          subject: reprocessMessage.subject,
+          from: [reprocessMessage.fromName, reprocessMessage.fromEmail]
+            .filter(Boolean)
+            .join(" "),
+          body: reprocessMessage.bodyText ?? reprocessMessage.bodyPreview ?? "",
+        },
       },
     );
 

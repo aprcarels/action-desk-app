@@ -84,7 +84,7 @@ export function generateRecommendedAction({
   }
 
   if (workType === "vendor") {
-    return "This appears to be a vendor or account-maintenance thread. Review internally and reply only if your team intentionally owns the request.";
+    return "No customer-service action needed. Mark not relevant unless an internal owner intentionally wants to review the vendor or sales outreach.";
   }
 
   if (workType === "internal") {
