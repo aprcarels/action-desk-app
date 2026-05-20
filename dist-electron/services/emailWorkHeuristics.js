@@ -10,6 +10,10 @@ exports.isLikelyThreadContinuation = isLikelyThreadContinuation;
 exports.isInternalOperationsThread = isInternalOperationsThread;
 exports.hasShippingDeadlineRequest = hasShippingDeadlineRequest;
 exports.hasConfirmationRequest = hasConfirmationRequest;
+exports.hasOperationalLogisticsSchedulingSignals = hasOperationalLogisticsSchedulingSignals;
+exports.hasOperationalLogisticsScheduleConflict = hasOperationalLogisticsScheduleConflict;
+exports.hasOperationalLogisticsFailureOrEscalationSignals = hasOperationalLogisticsFailureOrEscalationSignals;
+exports.hasActualBillingQuestion = hasActualBillingQuestion;
 exports.hasLogisticsCoordinationSignals = hasLogisticsCoordinationSignals;
 exports.hasOperationalTimingSignal = hasOperationalTimingSignal;
 exports.getLatestUrgencySignal = getLatestUrgencySignal;
@@ -265,6 +269,84 @@ const LOGISTICS_COORDINATION_PATTERNS = [
     "dock",
     "facility drop",
 ];
+const OPERATIONAL_LOGISTICS_SCHEDULING_PHRASES = [
+    "scheduled load",
+    "multi pick up",
+    "multi pickup",
+    "multi-pick up",
+    "multi-pickup",
+    "carrier pickup date",
+    "carrier pickup",
+    "pickup date",
+    "pickup appointment",
+    "pickup number",
+    "scheduled pickup",
+    "routing status",
+    "routing instruction",
+    "routing instructions",
+    "routing coordination",
+    "reply if date/time does not work",
+    "reply if the date/time does not work",
+    "date/time does not work",
+    "loading and transit times",
+    "loading time",
+    "transit time",
+    "stop time",
+    "stop times",
+    "tonu",
+    "otif",
+];
+const OPERATIONAL_LOGISTICS_SCHEDULING_REGEXES = [
+    /\bmpu\b/,
+    /\bcdd\b/,
+    /\bstop\s*#?\s*[12]\b/,
+    /\bpickup\s*(?:no\.?|number|#)\b/,
+    /\bload\s*#?\s*\d{5,}\b/,
+];
+const LOGISTICS_SCHEDULE_CONFLICT_PATTERNS = [
+    "this date/time does not work",
+    "the date/time does not work for us",
+    "does not work for us",
+    "doesn't work for us",
+    "will not work for us",
+    "won't work for us",
+    "schedule conflict",
+    "scheduling conflict",
+    "need alternate",
+    "need an alternate",
+    "alternate pickup",
+    "alternate scheduling",
+    "different pickup time",
+    "different pickup date",
+    "please reschedule",
+    "need to reschedule",
+    "must reschedule",
+    "cannot make the pickup",
+    "can't make the pickup",
+    "unable to make the pickup",
+];
+const LOGISTICS_FAILURE_ESCALATION_PATTERNS = [
+    "missed pickup",
+    "missed appointment",
+    "failed pickup",
+    "pickup failed",
+    "did not pick up",
+    "didn't pick up",
+    "not picked up",
+    "unable to pick up",
+    "cannot pick up",
+    "can't pick up",
+    "escalate",
+    "escalation",
+    "failure",
+    "failed",
+    "charge already applied",
+    "charges already applied",
+    "charges were applied",
+    "tonu applied",
+    "otif charge applied",
+    "penalty assessed",
+];
 const OPERATIONAL_TIMING_PATTERNS = [
     "appointment",
     "scheduled appointment",
@@ -281,6 +363,35 @@ const OPERATIONAL_TIMING_PATTERNS = [
     "delivered",
     "drop",
     "dropped",
+    "scheduled load",
+    "carrier pickup date",
+    "pickup appointment",
+    "pickup date",
+    "loading and transit times",
+];
+const BILLING_CORE_PATTERNS = [
+    "invoice",
+    "billing",
+    "refund",
+    "refunded",
+    "credit memo",
+    "credit request",
+    "payment",
+    "overcharged",
+    "over charge",
+    "charged twice",
+    "double charged",
+    "charged incorrectly",
+    "incorrect charge",
+    "wrong charge",
+    "dispute charge",
+    "chargeback",
+    "past due balance",
+];
+const BILLING_ASK_REGEXES = [
+    /\b(?:why|what|can|could|please|need|help|review|correct|dispute)\b.{0,80}\b(?:bill|billing|invoice|payment|refund|credit|charge|charged)\b/,
+    /\b(?:bill|billing|invoice|payment|refund|credit|charge|charged)\b.{0,80}\b(?:wrong|incorrect|mistake|dispute|refund|credit|overcharge|twice|duplicate|explain|review|correct)\b/,
+    /\b(?:we|i)\s+(?:were|was|have been)\s+charged\b/,
 ];
 const VENDOR_SALES_OUTREACH_PATTERNS = [
     "account executive",
@@ -374,6 +485,20 @@ function normalizeWhitespace(value) {
 }
 function includesAny(text, patterns) {
     return patterns.some((pattern) => text.includes(pattern));
+}
+function countOperationalLogisticsSchedulingSignals(normalized) {
+    const matches = new Set();
+    for (const phrase of OPERATIONAL_LOGISTICS_SCHEDULING_PHRASES) {
+        if (normalized.includes(phrase)) {
+            matches.add(phrase);
+        }
+    }
+    OPERATIONAL_LOGISTICS_SCHEDULING_REGEXES.forEach((pattern, index) => {
+        if (pattern.test(normalized)) {
+            matches.add(`regex:${index}`);
+        }
+    });
+    return matches.size;
 }
 function isVendorSalesOutreach(text) {
     const normalized = normalizeWhitespace(text).toLowerCase();
@@ -496,11 +621,59 @@ function hasShippingDeadlineRequest(text) {
 function hasConfirmationRequest(text) {
     return includesAny(normalizeWhitespace(text).toLowerCase(), CONFIRMATION_REQUEST_PATTERNS);
 }
+function hasOperationalLogisticsSchedulingSignals(text) {
+    const normalized = normalizeWhitespace(text).toLowerCase();
+    if (!normalized) {
+        return false;
+    }
+    const signalCount = countOperationalLogisticsSchedulingSignals(normalized);
+    const hasStrongSchedulingSignal = normalized.includes("scheduled load") ||
+        normalized.includes("multi pick up") ||
+        normalized.includes("multi pickup") ||
+        normalized.includes("carrier pickup date") ||
+        normalized.includes("routing status") ||
+        normalized.includes("reply if date/time does not work") ||
+        normalized.includes("reply if the date/time does not work") ||
+        /\bmpu\b/.test(normalized);
+    const hasLogisticsNoun = /\b(?:load|pickup|pick up|routing|carrier|stop|appointment)\b/.test(normalized);
+    return ((hasStrongSchedulingSignal && signalCount >= 2) ||
+        (hasLogisticsNoun && signalCount >= 3));
+}
+function hasOperationalLogisticsScheduleConflict(text) {
+    const normalized = normalizeWhitespace(text).toLowerCase();
+    if (!normalized) {
+        return false;
+    }
+    return includesAny(normalized, LOGISTICS_SCHEDULE_CONFLICT_PATTERNS);
+}
+function hasOperationalLogisticsFailureOrEscalationSignals(text) {
+    const normalized = normalizeWhitespace(text).toLowerCase();
+    if (!normalized) {
+        return false;
+    }
+    return includesAny(normalized, LOGISTICS_FAILURE_ESCALATION_PATTERNS);
+}
+function hasActualBillingQuestion(text) {
+    const normalized = normalizeWhitespace(text).toLowerCase();
+    if (!normalized) {
+        return false;
+    }
+    const hasBillingCore = includesAny(normalized, BILLING_CORE_PATTERNS);
+    const hasBillingAsk = BILLING_ASK_REGEXES.some((pattern) => pattern.test(normalized));
+    if (hasOperationalLogisticsSchedulingSignals(normalized)) {
+        return hasBillingAsk && hasBillingCore;
+    }
+    return hasBillingCore || hasBillingAsk;
+}
 function hasLogisticsCoordinationSignals(text) {
-    return includesAny(normalizeWhitespace(text).toLowerCase(), LOGISTICS_COORDINATION_PATTERNS);
+    const normalized = normalizeWhitespace(text).toLowerCase();
+    return (includesAny(normalized, LOGISTICS_COORDINATION_PATTERNS) ||
+        hasOperationalLogisticsSchedulingSignals(normalized));
 }
 function hasOperationalTimingSignal(text) {
-    return includesAny(normalizeWhitespace(text).toLowerCase(), OPERATIONAL_TIMING_PATTERNS);
+    const normalized = normalizeWhitespace(text).toLowerCase();
+    return (includesAny(normalized, OPERATIONAL_TIMING_PATTERNS) ||
+        hasOperationalLogisticsSchedulingSignals(normalized));
 }
 function getLatestUrgencySignal(text) {
     const normalized = normalizeWhitespace(text).toLowerCase();

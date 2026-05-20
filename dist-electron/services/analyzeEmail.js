@@ -89,6 +89,7 @@ function getIntent(normalizedLatestMessage, normalizedEmail) {
     }
     const isInternalOperations = (0, emailWorkHeuristics_1.isInternalOperationsThread)(normalizedLatestMessage) ||
         (0, emailWorkHeuristics_1.isInternalOperationsThread)(normalizedEmail);
+    const hasOperationalLogisticsScheduling = (0, emailWorkHeuristics_1.hasOperationalLogisticsSchedulingSignals)(normalizedLatestMessage);
     const asksForPod = normalizedLatestMessage.includes("proof of delivery") ||
         normalizedLatestMessage.includes("pod") ||
         normalizedLatestMessage.includes("delivery receipt");
@@ -118,11 +119,7 @@ function getIntent(normalizedLatestMessage, normalizedEmail) {
         normalizedLatestMessage.includes("duplicate order") ||
         normalizedLatestMessage.includes("received two") ||
         normalizedLatestMessage.includes("sent twice");
-    const asksBillingQuestion = normalizedLatestMessage.includes("invoice") ||
-        normalizedLatestMessage.includes("billing") ||
-        normalizedLatestMessage.includes("charged") ||
-        normalizedLatestMessage.includes("charge") ||
-        normalizedLatestMessage.includes("bill");
+    const asksBillingQuestion = (0, emailWorkHeuristics_1.hasActualBillingQuestion)(normalizedLatestMessage);
     const asksForStatus = normalizedLatestMessage.includes("status") ||
         normalizedLatestMessage.includes("where is my order") ||
         normalizedLatestMessage.includes("track") ||
@@ -137,6 +134,9 @@ function getIntent(normalizedLatestMessage, normalizedEmail) {
     const hasLogisticsContext = (0, emailWorkHeuristics_1.hasLogisticsCoordinationSignals)(normalizedLatestMessage);
     if (isInternalOperations) {
         return "general_support";
+    }
+    if (hasOperationalLogisticsScheduling) {
+        return "operational_logistics_scheduling";
     }
     if (hasExplicitConfirmationRequest && hasLogisticsContext) {
         return "operational_confirmation";
@@ -174,6 +174,7 @@ function getUrgency(normalizedLatestMessage, normalizedEmail) {
     const confirmationRequest = (0, emailWorkHeuristics_1.hasConfirmationRequest)(normalizedLatestMessage);
     const logisticsContext = (0, emailWorkHeuristics_1.hasLogisticsCoordinationSignals)(normalizedLatestMessage);
     const operationalTimingSignal = (0, emailWorkHeuristics_1.hasOperationalTimingSignal)(normalizedLatestMessage);
+    const hasOperationalLogisticsScheduling = (0, emailWorkHeuristics_1.hasOperationalLogisticsSchedulingSignals)(normalizedLatestMessage);
     if ((0, emailWorkHeuristics_1.isInternalOperationsThread)(normalizedLatestMessage) ||
         (0, emailWorkHeuristics_1.isInternalOperationsThread)(normalizedEmail)) {
         return "low";
@@ -187,6 +188,12 @@ function getUrgency(normalizedLatestMessage, normalizedEmail) {
     }
     if (latestUrgencySignal === "medium" && ((0, emailWorkHeuristics_1.hasClearRequest)(normalizedLatestMessage) || hasDeadlineRequest)) {
         return "medium";
+    }
+    if (hasOperationalLogisticsScheduling) {
+        return (0, emailWorkHeuristics_1.hasOperationalLogisticsFailureOrEscalationSignals)(normalizedLatestMessage) ||
+            ((0, emailWorkHeuristics_1.hasOperationalLogisticsScheduleConflict)(normalizedLatestMessage) && latestUrgencySignal === "high")
+            ? "high"
+            : "medium";
     }
     if (hasDeadlineRequest) {
         return normalizedLatestMessage.includes("today") ||
@@ -273,10 +280,7 @@ function getRisks(normalizedLatestMessage) {
         normalizedLatestMessage.includes("sent twice")) {
         risks.push("duplicate_shipment_possible");
     }
-    if (normalizedLatestMessage.includes("invoice") ||
-        normalizedLatestMessage.includes("billing") ||
-        normalizedLatestMessage.includes("charged") ||
-        normalizedLatestMessage.includes("charge")) {
+    if ((0, emailWorkHeuristics_1.hasActualBillingQuestion)(normalizedLatestMessage)) {
         risks.push("billing_discrepancy");
     }
     return Array.from(new Set(risks));
@@ -318,6 +322,13 @@ function getSummary(intent, urgency, normalizedLatestMessage, analysis) {
         return referenceLabel
             ? `Customer provided inbound or logistics details for ${referenceLabel} and requested confirmation of receipt or follow-up once the event occurs.`
             : "Customer provided inbound or logistics details and requested confirmation of receipt or follow-up once the event occurs.";
+    }
+    if (intent === "operational_logistics_scheduling" ||
+        intent === "routing_coordination" ||
+        intent === "carrier_pickup_scheduling") {
+        return (0, emailWorkHeuristics_1.hasOperationalLogisticsScheduleConflict)(normalizedLatestMessage)
+            ? "Operational logistics scheduling email needs alternate pickup or routing coordination."
+            : "Operational logistics scheduling email provides pickup/routing details and asks AP Express to reply only if the date/time does not work.";
     }
     if (intent === "where_is_my_order") {
         if (hasDeadlineRequest) {

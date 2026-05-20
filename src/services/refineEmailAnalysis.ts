@@ -1,6 +1,7 @@
 import type {
   Actionability,
   EmailAnalysis,
+  IntentCode,
   MessageType,
   ReplyNeeded,
   RiskCode,
@@ -14,10 +15,14 @@ import {
 } from "./caseIdentifiers";
 import {
   extractLatestMessageText,
+  hasActualBillingQuestion,
   getLatestUrgencySignal,
   hasConfirmationRequest,
   hasClearRequest,
   hasLogisticsCoordinationSignals,
+  hasOperationalLogisticsFailureOrEscalationSignals,
+  hasOperationalLogisticsScheduleConflict,
+  hasOperationalLogisticsSchedulingSignals,
   hasOperationalTimingSignal,
   hasShippingDeadlineRequest,
   includesAny,
@@ -105,6 +110,14 @@ const FRUSTRATION_PATTERNS = [
 
 function hasRisk(risks: RiskCode[], risk: RiskCode): boolean {
   return risks.includes(risk);
+}
+
+function isOperationalLogisticsIntent(intent: IntentCode): boolean {
+  return (
+    intent === "operational_logistics_scheduling" ||
+    intent === "routing_coordination" ||
+    intent === "carrier_pickup_scheduling"
+  );
 }
 
 function getWorkType(options: {
@@ -200,10 +213,21 @@ function getActionability(options: {
   noActionNeeded: boolean;
   hasExplicitRequest: boolean;
   isThreadContinuation: boolean;
+  isOperationalLogisticsScheduling: boolean;
+  hasOperationalLogisticsConflict: boolean;
+  hasOperationalLogisticsFailureOrEscalation: boolean;
   analysis: EmailAnalysis;
 }): Actionability {
   if (options.noActionNeeded) {
     return "no_action_needed";
+  }
+
+  if (options.isOperationalLogisticsScheduling) {
+    return options.hasOperationalLogisticsConflict ||
+      options.hasOperationalLogisticsFailureOrEscalation ||
+      options.hasExplicitRequest
+      ? "action_required"
+      : "review_needed";
   }
 
   if (options.isThreadContinuation && !options.hasExplicitRequest) {
@@ -255,6 +279,8 @@ function getRefinedUrgency(options: {
   hasConfirmationRequest: boolean;
   hasLogisticsContext: boolean;
   hasOperationalTimingSignal: boolean;
+  isOperationalLogisticsScheduling: boolean;
+  hasOperationalLogisticsFailureOrEscalation: boolean;
 }): EmailAnalysis["urgency"] {
   const latestUrgencySignal = getLatestUrgencySignal(options.latestMessageText);
   const hasDeadlineRequest =
@@ -289,6 +315,13 @@ function getRefinedUrgency(options: {
 
   if (options.messageType === "internal_alert" && !hasMaterialCustomerRisk) {
     return "low";
+  }
+
+  if (options.isOperationalLogisticsScheduling) {
+    return options.hasOperationalLogisticsFailureOrEscalation &&
+      options.actionability === "action_required"
+      ? "high"
+      : "medium";
   }
 
   if (
@@ -354,6 +387,7 @@ function getRefinedSummary(options: {
   actionability: Actionability;
   isThreadContinuation: boolean;
   isInternalOperationalReport: boolean;
+  isOperationalLogisticsScheduling: boolean;
 }): string {
   if (options.analysis.workType === "vendor") {
     return "Vendor sales outreach or account-maintenance message. Not a customer-service case.";
@@ -377,6 +411,12 @@ function getRefinedSummary(options: {
 
   if (options.messageType === "internal_alert") {
     return "Internal alert or automated notification. Review for awareness and only act if follow-up is needed.";
+  }
+
+  if (options.isOperationalLogisticsScheduling) {
+    return options.actionability === "action_required"
+      ? "Operational logistics scheduling or routing email needs pickup timing review before a reply."
+      : "Operational logistics scheduling or routing email. Review pickup details and reply only if alternate scheduling is needed.";
   }
 
   if (
@@ -467,17 +507,29 @@ export function refineEmailAnalysis(email: string, analysis: EmailAnalysis): Ema
     isInternalOperationsThread(normalizedLatestMessage) ||
     isInternalOperationsThread(normalizedEmail);
   const confirmationRequest = hasConfirmationRequest(normalizedLatestMessage);
-  const logisticsContext = hasLogisticsCoordinationSignals(normalizedLatestMessage);
+  const operationalLogisticsScheduling =
+    hasOperationalLogisticsSchedulingSignals(normalizedLatestMessage);
+  const operationalLogisticsConflict =
+    hasOperationalLogisticsScheduleConflict(normalizedLatestMessage);
+  const operationalLogisticsFailureOrEscalation =
+    hasOperationalLogisticsFailureOrEscalationSignals(normalizedLatestMessage);
+  const logisticsContext =
+    hasLogisticsCoordinationSignals(normalizedLatestMessage) ||
+    operationalLogisticsScheduling;
   const operationalTimingSignal =
     hasShippingDeadlineRequest(normalizedLatestMessage) ||
-    hasOperationalTimingSignal(normalizedLatestMessage);
+    hasOperationalTimingSignal(normalizedLatestMessage) ||
+    operationalLogisticsScheduling;
   const alertLikeStatusRequest =
     (likelyAutomatedAlert || isInternalOperations || isThreadContinuation) &&
     (analysisWithIdentifiers.intent === "where_is_my_order" || analysisWithIdentifiers.intent === "general_support");
   const refinedIntent =
     vendorSalesOutreach || alertLikeStatusRequest
       ? "general_support"
-      : analysisWithIdentifiers.intent;
+      : operationalLogisticsScheduling &&
+          !isOperationalLogisticsIntent(analysisWithIdentifiers.intent)
+        ? "operational_logistics_scheduling"
+        : analysisWithIdentifiers.intent;
   const workType = getWorkType({
     normalizedEmail,
     likelyAutomatedAlert,
@@ -509,12 +561,22 @@ export function refineEmailAnalysis(email: string, analysis: EmailAnalysis): Ema
       (workType !== "customer_support" && workType !== "unknown"),
     hasExplicitRequest,
     isThreadContinuation,
+    isOperationalLogisticsScheduling:
+      operationalLogisticsScheduling || isOperationalLogisticsIntent(refinedIntent),
+    hasOperationalLogisticsConflict: operationalLogisticsConflict,
+    hasOperationalLogisticsFailureOrEscalation:
+      operationalLogisticsFailureOrEscalation,
     analysis: {
       ...analysisWithIdentifiers,
       intent: refinedIntent,
     },
   });
-  const replyNeeded = getReplyNeeded(actionability);
+  const replyNeeded =
+    (operationalLogisticsScheduling || isOperationalLogisticsIntent(refinedIntent)) &&
+    !operationalLogisticsConflict &&
+    !operationalLogisticsFailureOrEscalation
+      ? "no"
+      : getReplyNeeded(actionability);
   const urgency = getRefinedUrgency({
     normalizedEmail,
     analysis: {
@@ -530,13 +592,28 @@ export function refineEmailAnalysis(email: string, analysis: EmailAnalysis): Ema
     hasConfirmationRequest: confirmationRequest,
     hasLogisticsContext: logisticsContext,
     hasOperationalTimingSignal: operationalTimingSignal,
+    isOperationalLogisticsScheduling:
+      operationalLogisticsScheduling || isOperationalLogisticsIntent(refinedIntent),
+    hasOperationalLogisticsFailureOrEscalation:
+      operationalLogisticsFailureOrEscalation,
   });
+  const isOperationalLogisticsScheduling =
+    operationalLogisticsScheduling || isOperationalLogisticsIntent(refinedIntent);
 
   const refinedRisks = vendorSalesOutreach
     ? []
     : Array.from(new Set([
-        ...analysisWithIdentifiers.risks,
-        ...(includesAny(normalizedEmail, FRUSTRATION_PATTERNS) ? ["customer_frustration" as const] : []),
+        ...analysisWithIdentifiers.risks.filter((risk) => (
+          isOperationalLogisticsScheduling && !hasActualBillingQuestion(normalizedLatestMessage)
+            ? risk !== "billing_discrepancy" &&
+              risk !== "customer_frustration"
+            : true
+        )),
+        ...(isOperationalLogisticsScheduling
+          ? []
+          : includesAny(normalizedEmail, FRUSTRATION_PATTERNS)
+            ? ["customer_frustration" as const]
+            : []),
       ]));
 
   return {
@@ -567,6 +644,7 @@ export function refineEmailAnalysis(email: string, analysis: EmailAnalysis): Ema
       actionability,
       isThreadContinuation,
       isInternalOperationalReport: internalOperationalReport,
+      isOperationalLogisticsScheduling,
     }),
     messageType,
     actionability,

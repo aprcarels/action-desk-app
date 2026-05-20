@@ -192,6 +192,11 @@ function normalizeEmailText(email) {
         .join("\n")
         .toLowerCase();
 }
+function isOperationalLogisticsIntent(intent) {
+    return (intent === "operational_logistics_scheduling" ||
+        intent === "routing_coordination" ||
+        intent === "carrier_pickup_scheduling");
+}
 function isLowValueSystemReportEmail(email) {
     const sender = (email.senderEmail || "").toLowerCase();
     const normalizedText = normalizeEmailText(email);
@@ -363,13 +368,45 @@ function normalizeProcessedEmailResult(email, result) {
         hasClearRequest: (0, emailWorkHeuristics_1.hasClearRequest)(normalizedLatestMessage),
         isThreadContinuation: (0, emailWorkHeuristics_1.isLikelyThreadContinuation)(latestMessageText, email.body),
     };
-    const workType = classifyWorkType(email, derivedAnalysis);
-    const analysis = workType === "customer_support"
+    const operationalLogisticsText = [normalizedLatestMessage, normalizeEmailText(email)]
+        .filter(Boolean)
+        .join("\n");
+    const operationalLogisticsScheduling = (0, emailWorkHeuristics_1.hasOperationalLogisticsSchedulingSignals)(operationalLogisticsText) ||
+        isOperationalLogisticsIntent(derivedAnalysis.intent);
+    const operationalLogisticsConflict = (0, emailWorkHeuristics_1.hasOperationalLogisticsScheduleConflict)(operationalLogisticsText);
+    const operationalLogisticsFailureOrEscalation = (0, emailWorkHeuristics_1.hasOperationalLogisticsFailureOrEscalationSignals)(operationalLogisticsText);
+    const operationalLogisticsRequiresReply = operationalLogisticsConflict || operationalLogisticsFailureOrEscalation;
+    const analysisForWorkType = operationalLogisticsScheduling
         ? {
             ...derivedAnalysis,
+            intent: isOperationalLogisticsIntent(derivedAnalysis.intent)
+                ? derivedAnalysis.intent
+                : "operational_logistics_scheduling",
+            summary: operationalLogisticsRequiresReply
+                ? "Operational logistics scheduling or routing email needs pickup timing review before a reply."
+                : "Operational logistics scheduling or routing email. Review pickup details and reply only if alternate scheduling is needed.",
+            urgency: operationalLogisticsFailureOrEscalation ? "high" : "medium",
+            risks: (0, emailWorkHeuristics_1.hasActualBillingQuestion)(operationalLogisticsText)
+                ? derivedAnalysis.risks
+                : derivedAnalysis.risks.filter((risk) => (risk !== "billing_discrepancy" &&
+                    risk !== "customer_frustration")),
+            actionability: operationalLogisticsRequiresReply
+                ? "action_required"
+                : "review_needed",
+            replyNeeded: operationalLogisticsRequiresReply ? "yes" : "no",
+            messageType: "customer_request",
+            hasClearRequest: derivedAnalysis.hasClearRequest || operationalLogisticsRequiresReply,
+            hasLogisticsContext: true,
+            hasOperationalTimingSignal: true,
+        }
+        : derivedAnalysis;
+    const workType = classifyWorkType(email, analysisForWorkType);
+    const analysis = workType === "customer_support"
+        ? {
+            ...analysisForWorkType,
             workType,
         }
-        : createSuppressedAnalysis(derivedAnalysis, workType);
+        : createSuppressedAnalysis(analysisForWorkType, workType);
     const orderContext = workType === "customer_support" ? result.orderContext : undefined;
     const nextAction = (0, generateRecommendedAction_1.generateRecommendedAction)({
         intent: analysis.intent,

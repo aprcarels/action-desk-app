@@ -9,6 +9,9 @@ export type IntentCode =
   | "address_change"
   | "billing_question"
   | "operational_confirmation"
+  | "operational_logistics_scheduling"
+  | "routing_coordination"
+  | "carrier_pickup_scheduling"
   | "general_support";
 
 export type RiskCode =
@@ -359,6 +362,9 @@ export type AiEmailClassificationCategory =
   | "customer support request"
   | "order/shipment issue"
   | "billing/refund"
+  | "operational logistics scheduling"
+  | "routing coordination"
+  | "carrier pickup scheduling"
   | "vendor sales outreach"
   | "internal operational update"
   | "operational report"

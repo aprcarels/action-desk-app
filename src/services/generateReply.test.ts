@@ -205,6 +205,47 @@ describe("generateReply", () => {
     expect(countSentences(draft)).toBeLessThanOrEqual(3);
   });
 
+  it("suppresses reply drafts for operational logistics scheduling when no alternate is needed", () => {
+    const draft = generateReply(
+      buildAnalysis({
+        intent: "operational_logistics_scheduling",
+        summary: "Operational logistics scheduling email.",
+        orderNumber: undefined,
+        caseIdentifiers: undefined,
+        risks: [],
+        actionability: "review_needed",
+        replyNeeded: "no",
+        hasClearRequest: false,
+        hasLogisticsContext: true,
+        hasOperationalTimingSignal: true,
+      }),
+    );
+
+    expect(draft).toBe("");
+  });
+
+  it("drafts scheduling clarification without asking for order or invoice numbers", () => {
+    const draft = generateReply(
+      buildAnalysis({
+        intent: "operational_logistics_scheduling",
+        summary: "Operational logistics scheduling email needs alternate timing review.",
+        orderNumber: undefined,
+        caseIdentifiers: undefined,
+        risks: [],
+        actionability: "action_required",
+        replyNeeded: "yes",
+        hasClearRequest: true,
+        hasLogisticsContext: true,
+        hasOperationalTimingSignal: true,
+      }),
+    );
+
+    expect(draft).toContain("scheduled pickup and routing details");
+    expect(draft).toContain("alternate pickup date/time");
+    expect(draft.toLowerCase()).not.toContain("order number");
+    expect(draft.toLowerCase()).not.toContain("invoice");
+  });
+
   it("keeps replies concise and avoids generic corporate filler", () => {
     const order: OrderContext = {
       orderNumber: "ORD-1002",

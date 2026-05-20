@@ -84,6 +84,9 @@ describe("Ollama email classifier", () => {
     expect(prompt).toContain("Action Desk rules engine remains authoritative");
     expect(prompt).toContain("must not send email");
     expect(prompt).toContain("order/shipment issue");
+    expect(prompt).toContain("operational logistics scheduling");
+    expect(prompt).toContain("routing coordination");
+    expect(prompt).toContain("carrier pickup scheduling");
     expect(prompt).toContain("vendor sales outreach");
     expect(prompt).toContain("internal operational update");
     expect(prompt).toContain("operational report");
@@ -158,6 +161,30 @@ describe("Ollama email classifier", () => {
 
     expect(result.category).toBe("internal operational update");
     expect(result.actionable).toBe(false);
+  });
+
+  it("returns operational logistics scheduling classification from Ollama output", async () => {
+    mockOllamaClassification({
+      category: "operational_logistics_scheduling",
+      actionable: false,
+      urgency: "medium",
+      summary: "Scheduled MPU load includes pickup timing and routing details.",
+      confidence: 0.89,
+    });
+
+    const result = await classifyEmailWithOllama({
+      subject: "MPU LOAD 93215119 - SCHEDULING",
+      from: "WROCREG1CS@walmart.com",
+      body: "Scheduled load for Multi Pick Up with carrier pickup date, pickup number, routing status, and TONU / OTIF charges may apply.",
+    });
+
+    expect(result).toMatchObject({
+      category: "operational logistics scheduling",
+      actionable: false,
+      urgency: "medium",
+      confidence: 0.89,
+      aiSource: "ollama",
+    });
   });
 
   it("emits Ollama diagnostics for calls, status, and parsed output", async () => {

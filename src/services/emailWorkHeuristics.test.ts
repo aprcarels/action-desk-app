@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   extractLatestMessageText,
+  hasActualBillingQuestion,
   hasClearRequest,
+  hasOperationalLogisticsFailureOrEscalationSignals,
+  hasOperationalLogisticsScheduleConflict,
+  hasOperationalLogisticsSchedulingSignals,
   isInternalOperationalReport,
   isLikelyThreadContinuation,
   isVendorSalesOutreach,
@@ -71,5 +75,22 @@ describe("emailWorkHeuristics", () => {
 
     expect(isInternalOperationalReport(eodReport)).toBe(true);
     expect(hasClearRequest(eodReport)).toBe(false);
+  });
+
+  it("detects Walmart MPU scheduling as operational logistics, not billing", () => {
+    const walmartScheduling = [
+      "MPU LOAD 93215119 - SCHEDULING",
+      "This is a scheduled load for Multi Pick Up.",
+      "Stop 1 pickup time is 08:00 and Stop 2 pickup time is 11:30.",
+      "Carrier pickup date: 05/21/26. Pickup number: 93215119.",
+      "Routing status: routed. CDD 05/24/26.",
+      "Reply if date/time does not work.",
+      "TONU / OTIF charges may apply if loading and transit times are missed.",
+    ].join(" ");
+
+    expect(hasOperationalLogisticsSchedulingSignals(walmartScheduling)).toBe(true);
+    expect(hasOperationalLogisticsScheduleConflict(walmartScheduling)).toBe(false);
+    expect(hasOperationalLogisticsFailureOrEscalationSignals(walmartScheduling)).toBe(false);
+    expect(hasActualBillingQuestion(walmartScheduling)).toBe(false);
   });
 });

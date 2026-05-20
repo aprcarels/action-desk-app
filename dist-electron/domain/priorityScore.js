@@ -1,6 +1,11 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.computePriorityScore = computePriorityScore;
+function isOperationalLogisticsIntent(intent) {
+    return (intent === "operational_logistics_scheduling" ||
+        intent === "routing_coordination" ||
+        intent === "carrier_pickup_scheduling");
+}
 function computePriorityScore(analysis, orderContext) {
     let score = 0;
     const breakdown = [];
@@ -67,6 +72,9 @@ function computePriorityScore(analysis, orderContext) {
     }
     if (analysis.intent === "operational_confirmation") {
         addPoints("Operational confirmation request", 15);
+    }
+    if (isOperationalLogisticsIntent(analysis.intent)) {
+        addPoints("Operational logistics scheduling", 15);
     }
     if (analysis.hasConfirmationRequest && analysis.hasLogisticsContext) {
         addPoints("Current logistics confirmation ask", 15);

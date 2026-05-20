@@ -9,6 +9,9 @@ export const INTENT_LABELS: Record<IntentCode, string> = {
   address_change: "Address Change",
   billing_question: "Billing Question",
   operational_confirmation: "Operational Confirmation",
+  operational_logistics_scheduling: "Operational Logistics Scheduling",
+  routing_coordination: "Routing Coordination",
+  carrier_pickup_scheduling: "Carrier Pickup Scheduling",
   general_support: "General Support",
 };
 
@@ -39,12 +42,23 @@ const INTENT_ALIASES: Record<string, IntentCode> = {
   billing_question: "billing_question",
   operational_confirmation: "operational_confirmation",
   logistics_confirmation: "operational_confirmation",
+  operational_logistics_scheduling: "operational_logistics_scheduling",
+  logistics_scheduling: "operational_logistics_scheduling",
+  operational_scheduling: "operational_logistics_scheduling",
+  routing_coordination: "routing_coordination",
+  carrier_pickup_scheduling: "carrier_pickup_scheduling",
+  carrier_pickup: "carrier_pickup_scheduling",
+  pickup_scheduling: "carrier_pickup_scheduling",
   general_support: "general_support",
   general_support_request: "general_support",
   duplicate_shipment_concern: "general_support",
+  internal_operational_update: "general_support",
+  operational_report: "general_support",
+  no_action_needed: "general_support",
   not_relevant: "general_support",
   sales_outreach: "general_support",
   vendor_solicitation: "general_support",
+  vendor_sales_outreach: "general_support",
 };
 
 const RISK_ALIASES: Record<string, RiskCode | null> = {

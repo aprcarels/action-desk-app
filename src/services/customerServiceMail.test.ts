@@ -418,6 +418,54 @@ describe("customerServiceMail", () => {
     expect(normalized.replyDraft).toBe("");
   });
 
+  it("rewrites Walmart MPU scheduling away from billing reply guidance", () => {
+    const email = buildEmail({
+      senderName: "Walmart Routing",
+      senderEmail: "WROCREG1CS@walmart.com",
+      subject: "MPU LOAD 93215119 - SCHEDULING",
+      body: [
+        "This is a scheduled load for Multi Pick Up.",
+        "Stop 1 pickup time is 08:00 and Stop 2 pickup time is 11:30.",
+        "Carrier pickup date: 05/21/26.",
+        "Pickup number: 93215119.",
+        "Routing status: routed. CDD 05/24/26.",
+        "Reply if date/time does not work.",
+        "TONU / OTIF charges may apply if loading and transit times are missed.",
+      ].join("\n"),
+      previewText: "Scheduled load for Multi Pick Up. Routing status: routed.",
+    });
+
+    const normalized = normalizeProcessedEmailResult(
+      email,
+      buildResult({
+        analysis: {
+          ...buildResult().analysis,
+          intent: "billing_question",
+          urgency: "high",
+          orderNumber: undefined,
+          risks: ["billing_discrepancy", "customer_frustration"],
+          summary: "Customer has a billing or invoice question.",
+          nextAction: "Request the order number or invoice number for the billing issue.",
+        },
+      }),
+    );
+
+    expect(normalized.analysis.intent).toBe("operational_logistics_scheduling");
+    expect(normalized.analysis.workType).toBe("customer_support");
+    expect(normalized.analysis.urgency).toBe("medium");
+    expect(normalized.analysis.actionability).toBe("review_needed");
+    expect(normalized.analysis.replyNeeded).toBe("no");
+    expect(normalized.analysis.risks).toEqual([]);
+    expect(normalized.analysis.nextAction).toBe(
+      "Review scheduled pickup details and confirm whether the date/time works. Reply only if alternate scheduling or pickup details are needed.",
+    );
+    expect(normalized.analysis.nextAction.toLowerCase()).not.toContain("invoice");
+    expect(normalized.analysis.nextAction.toLowerCase()).not.toContain("order number");
+    expect(normalized.replyDraft).toBe("");
+    expect(normalized.priorityScore).toBeGreaterThanOrEqual(40);
+    expect(normalized.priorityScore).toBeLessThan(70);
+  });
+
   it("suppresses EQISMART EOD internal reports instead of classifying them as WIMO", () => {
     const email = buildEmail({
       senderName: "Hector Salas",

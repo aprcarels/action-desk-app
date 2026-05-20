@@ -96,6 +96,11 @@ export function generateReply(
     case "operational_confirmation":
       replyDraft = buildOperationalConfirmationReply(context);
       break;
+    case "operational_logistics_scheduling":
+    case "routing_coordination":
+    case "carrier_pickup_scheduling":
+      replyDraft = buildOperationalLogisticsSchedulingReply(context);
+      break;
     case "general_support":
     default:
       replyDraft = buildGeneralSupportReply(context);
@@ -274,6 +279,10 @@ function buildFallbackNextStep(
       return "I will review the billing details and follow up with the next step once I can verify the charge.";
     case "operational_confirmation":
       return "I will monitor the requested operational step and send a confirmation once it is completed.";
+    case "operational_logistics_scheduling":
+    case "routing_coordination":
+    case "carrier_pickup_scheduling":
+      return "I will review the scheduled pickup and routing details and follow up only if alternate scheduling is needed.";
     case "general_support":
     default:
       return "I will review the available details and follow up with the next step.";
@@ -589,6 +598,15 @@ function buildOperationalConfirmationReply({ analysis, referenceLabel }: ReplyBu
       ? `I have the logistics update for ${referenceLabel}.`
       : "I have the logistics update.",
     "I will send a confirmation once the requested operational step is completed.",
+  ]);
+}
+
+function buildOperationalLogisticsSchedulingReply({ referenceLabel }: ReplyBuilderContext): string {
+  return buildReply([
+    referenceLabel
+      ? `I have the scheduled pickup and routing details for ${referenceLabel}.`
+      : "I have the scheduled pickup and routing details.",
+    "If the current appointment needs to change, please send the alternate pickup date/time or routing detail and I will review it.",
   ]);
 }
 

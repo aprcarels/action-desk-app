@@ -116,6 +116,26 @@ describe("generateRecommendedAction", () => {
     expect(action).toContain("reply with the correction or explanation");
   });
 
+  it("uses scheduling guidance for operational logistics emails even when no reply is recommended", () => {
+    const action = generateRecommendedAction(
+      buildInput({
+        intent: "operational_logistics_scheduling",
+        actionability: "review_needed",
+        replyNeeded: "no",
+        orderNumber: undefined,
+        risks: [],
+        hasLogisticsContext: true,
+        hasOperationalTimingSignal: true,
+      }),
+    );
+
+    expect(action).toBe(
+      "Review scheduled pickup details and confirm whether the date/time works. Reply only if alternate scheduling or pickup details are needed.",
+    );
+    expect(action.toLowerCase()).not.toContain("invoice");
+    expect(action.toLowerCase()).not.toContain("order number");
+  });
+
   it("falls back to a concise operational next step for uncertain high-urgency work", () => {
     const action = generateRecommendedAction(
       buildInput({

@@ -125,4 +125,23 @@ describe("computePriorityScore", () => {
 
     expect(score.score).toBeGreaterThanOrEqual(80);
   });
+
+  it("keeps operational logistics scheduling medium but below high-priority customer issues", () => {
+    const score = computePriorityScore(
+      buildAnalysis({
+        intent: "operational_logistics_scheduling",
+        urgency: "medium",
+        actionability: "review_needed",
+        replyNeeded: "no",
+        hasClearRequest: false,
+        hasLogisticsContext: true,
+        hasOperationalTimingSignal: true,
+        workType: "customer_support",
+        messageType: "customer_request",
+      }),
+    );
+
+    expect(score.score).toBeGreaterThanOrEqual(40);
+    expect(score.score).toBeLessThan(70);
+  });
 });

@@ -9,6 +9,14 @@ type PriorityScoreResult = {
   breakdown: PriorityBreakdownItem[];
 };
 
+function isOperationalLogisticsIntent(intent: EmailAnalysis["intent"]): boolean {
+  return (
+    intent === "operational_logistics_scheduling" ||
+    intent === "routing_coordination" ||
+    intent === "carrier_pickup_scheduling"
+  );
+}
+
 export function computePriorityScore(
   analysis: EmailAnalysis,
   orderContext?: OrderContext,
@@ -77,6 +85,10 @@ export function computePriorityScore(
 
   if (analysis.intent === "operational_confirmation") {
     addPoints("Operational confirmation request", 15);
+  }
+
+  if (isOperationalLogisticsIntent(analysis.intent)) {
+    addPoints("Operational logistics scheduling", 15);
   }
 
   if (analysis.hasConfirmationRequest && analysis.hasLogisticsContext) {

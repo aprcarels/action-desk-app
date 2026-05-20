@@ -37,6 +37,14 @@ function requestMissingIdentifierAction(context: string): string {
   return `Request the order number or usable reference for ${context}, then mark waiting on customer until it is provided.`;
 }
 
+function isOperationalLogisticsIntent(intent: EmailAnalysis["intent"]): boolean {
+  return (
+    intent === "operational_logistics_scheduling" ||
+    intent === "routing_coordination" ||
+    intent === "carrier_pickup_scheduling"
+  );
+}
+
 export function generateRecommendedAction({
   intent,
   urgency,
@@ -93,6 +101,10 @@ export function generateRecommendedAction({
 
   if (workType === "unknown") {
     return "This message is not clearly a customer-service case. Review first and confirm ownership before replying.";
+  }
+
+  if (isOperationalLogisticsIntent(intent)) {
+    return "Review scheduled pickup details and confirm whether the date/time works. Reply only if alternate scheduling or pickup details are needed.";
   }
 
   if (replyNeeded === "no" || actionability === "no_action_needed") {

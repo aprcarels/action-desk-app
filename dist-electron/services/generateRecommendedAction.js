@@ -11,6 +11,11 @@ function getOrderLabel(orderNumber) {
 function requestMissingIdentifierAction(context) {
     return `Request the order number or usable reference for ${context}, then mark waiting on customer until it is provided.`;
 }
+function isOperationalLogisticsIntent(intent) {
+    return (intent === "operational_logistics_scheduling" ||
+        intent === "routing_coordination" ||
+        intent === "carrier_pickup_scheduling");
+}
 function generateRecommendedAction({ intent, urgency, risks, orderNumber, caseIdentifiers, hasDeadlineRequest, deadlineState, messageType, actionability, replyNeeded, workType, hasConfirmationRequest, hasLogisticsContext, hasOperationalTimingSignal, orderContext, }) {
     const orderLabel = getOrderLabel(orderNumber);
     const hasIdentifiers = (0, caseIdentifiers_1.hasCaseIdentifiers)({
@@ -46,6 +51,9 @@ function generateRecommendedAction({ intent, urgency, risks, orderNumber, caseId
     }
     if (workType === "unknown") {
         return "This message is not clearly a customer-service case. Review first and confirm ownership before replying.";
+    }
+    if (isOperationalLogisticsIntent(intent)) {
+        return "Review scheduled pickup details and confirm whether the date/time works. Reply only if alternate scheduling or pickup details are needed.";
     }
     if (replyNeeded === "no" || actionability === "no_action_needed") {
         return "No direct reply is recommended right now. Keep this for awareness and verify in WMS only if follow-up becomes necessary.";

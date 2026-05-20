@@ -8,10 +8,14 @@ import {
 } from "./caseIdentifiers";
 import {
   extractLatestMessageText,
+  hasActualBillingQuestion,
   getLatestUrgencySignal,
   hasConfirmationRequest,
   hasClearRequest,
   hasLogisticsCoordinationSignals,
+  hasOperationalLogisticsFailureOrEscalationSignals,
+  hasOperationalLogisticsScheduleConflict,
+  hasOperationalLogisticsSchedulingSignals,
   hasOperationalTimingSignal,
   hasShippingDeadlineRequest,
   isInternalOperationsThread,
@@ -113,6 +117,8 @@ function getIntent(normalizedLatestMessage: string, normalizedEmail: string): In
   const isInternalOperations =
     isInternalOperationsThread(normalizedLatestMessage) ||
     isInternalOperationsThread(normalizedEmail);
+  const hasOperationalLogisticsScheduling =
+    hasOperationalLogisticsSchedulingSignals(normalizedLatestMessage);
   const asksForPod =
     normalizedLatestMessage.includes("proof of delivery") ||
     normalizedLatestMessage.includes("pod") ||
@@ -148,12 +154,7 @@ function getIntent(normalizedLatestMessage: string, normalizedEmail: string): In
     normalizedLatestMessage.includes("duplicate order") ||
     normalizedLatestMessage.includes("received two") ||
     normalizedLatestMessage.includes("sent twice");
-  const asksBillingQuestion =
-    normalizedLatestMessage.includes("invoice") ||
-    normalizedLatestMessage.includes("billing") ||
-    normalizedLatestMessage.includes("charged") ||
-    normalizedLatestMessage.includes("charge") ||
-    normalizedLatestMessage.includes("bill");
+  const asksBillingQuestion = hasActualBillingQuestion(normalizedLatestMessage);
   const asksForStatus =
     normalizedLatestMessage.includes("status") ||
     normalizedLatestMessage.includes("where is my order") ||
@@ -171,6 +172,10 @@ function getIntent(normalizedLatestMessage: string, normalizedEmail: string): In
 
   if (isInternalOperations) {
     return "general_support";
+  }
+
+  if (hasOperationalLogisticsScheduling) {
+    return "operational_logistics_scheduling";
   }
 
   if (hasExplicitConfirmationRequest && hasLogisticsContext) {
@@ -224,6 +229,8 @@ function getUrgency(
   const confirmationRequest = hasConfirmationRequest(normalizedLatestMessage);
   const logisticsContext = hasLogisticsCoordinationSignals(normalizedLatestMessage);
   const operationalTimingSignal = hasOperationalTimingSignal(normalizedLatestMessage);
+  const hasOperationalLogisticsScheduling =
+    hasOperationalLogisticsSchedulingSignals(normalizedLatestMessage);
 
   if (
     isInternalOperationsThread(normalizedLatestMessage) ||
@@ -245,6 +252,13 @@ function getUrgency(
 
   if (latestUrgencySignal === "medium" && (hasClearRequest(normalizedLatestMessage) || hasDeadlineRequest)) {
     return "medium";
+  }
+
+  if (hasOperationalLogisticsScheduling) {
+    return hasOperationalLogisticsFailureOrEscalationSignals(normalizedLatestMessage) ||
+      (hasOperationalLogisticsScheduleConflict(normalizedLatestMessage) && latestUrgencySignal === "high")
+      ? "high"
+      : "medium";
   }
 
   if (hasDeadlineRequest) {
@@ -372,12 +386,7 @@ function getRisks(normalizedLatestMessage: string): RiskCode[] {
     risks.push("duplicate_shipment_possible");
   }
 
-  if (
-    normalizedLatestMessage.includes("invoice") ||
-    normalizedLatestMessage.includes("billing") ||
-    normalizedLatestMessage.includes("charged") ||
-    normalizedLatestMessage.includes("charge")
-  ) {
+  if (hasActualBillingQuestion(normalizedLatestMessage)) {
     risks.push("billing_discrepancy");
   }
 
@@ -433,6 +442,16 @@ function getSummary(
     return referenceLabel
       ? `Customer provided inbound or logistics details for ${referenceLabel} and requested confirmation of receipt or follow-up once the event occurs.`
       : "Customer provided inbound or logistics details and requested confirmation of receipt or follow-up once the event occurs.";
+  }
+
+  if (
+    intent === "operational_logistics_scheduling" ||
+    intent === "routing_coordination" ||
+    intent === "carrier_pickup_scheduling"
+  ) {
+    return hasOperationalLogisticsScheduleConflict(normalizedLatestMessage)
+      ? "Operational logistics scheduling email needs alternate pickup or routing coordination."
+      : "Operational logistics scheduling email provides pickup/routing details and asks AP Express to reply only if the date/time does not work.";
   }
 
   if (intent === "where_is_my_order") {
