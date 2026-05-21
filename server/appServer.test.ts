@@ -8,6 +8,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 const require = createRequire(import.meta.url);
 const nativeFetch = globalThis.fetch;
 const originalActionDeskAiEnabled = process.env.ACTION_DESK_AI_ENABLED;
+const originalActionDeskAiReplyDraftsEnabled =
+  process.env.ACTION_DESK_AI_REPLY_DRAFTS_ENABLED;
 const { createRequestHandler } = require("../electron/appServer.cjs") as {
   createRequestHandler: (options: {
     distDir: string;
@@ -137,6 +139,13 @@ describe("appServer AI classification route", () => {
       delete process.env.ACTION_DESK_AI_ENABLED;
     } else {
       process.env.ACTION_DESK_AI_ENABLED = originalActionDeskAiEnabled;
+    }
+
+    if (originalActionDeskAiReplyDraftsEnabled === undefined) {
+      delete process.env.ACTION_DESK_AI_REPLY_DRAFTS_ENABLED;
+    } else {
+      process.env.ACTION_DESK_AI_REPLY_DRAFTS_ENABLED =
+        originalActionDeskAiReplyDraftsEnabled;
     }
   });
 
@@ -363,6 +372,151 @@ describe("appServer AI classification route", () => {
           backendApiUrl: "http://192.168.15.177:4000",
         }),
       );
+    } finally {
+      await closeTestServer(server);
+    }
+  });
+
+  it("returns assistive Ollama reply draft without touching workflow state", async () => {
+    process.env.ACTION_DESK_AI_ENABLED = "true";
+    process.env.ACTION_DESK_AI_REPLY_DRAFTS_ENABLED = "true";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        json: async () => ({
+          response: JSON.stringify({
+            replyDraft: [
+              "Hi,",
+              "",
+              "I can help check the shipment status, but I need the order number or tracking number first.",
+              "Please send that over and I will review the latest available details.",
+              "",
+              "Best,",
+              "Support Team",
+            ].join("\n"),
+          }),
+        }),
+      }),
+    );
+    const getBootstrap = vi.fn();
+    const logger = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    };
+    const handler = createRequestHandler({
+      distDir: path.resolve("."),
+      databasePath: path.resolve("tmp-shared.sqlite"),
+      store: {
+        getBootstrap,
+      },
+      logger,
+      authProvider: {},
+    });
+    const { server, origin } = await startTestServer(handler);
+
+    try {
+      const response = await nativeFetch(`${origin}/api/ai/draft-reply`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          subject: "Where is my order?",
+          from: "customer@example.com",
+          body: "Where is my order?",
+          analysis: {
+            intent: "where_is_my_order",
+            summary: "Customer is asking for shipment status.",
+            nextAction: "Request the order number.",
+            actionability: "action_required",
+            replyNeeded: "yes",
+            workType: "customer_support",
+            messageType: "customer_request",
+            risks: [],
+          },
+          recommendedNextAction: "Request the order number.",
+        }),
+      });
+      const payload = (await response.json()) as {
+        replyDraft?: string;
+        aiSource?: string;
+      };
+
+      expect(response.status).toBe(200);
+      expect(payload).toMatchObject({
+        aiSource: "ollama",
+      });
+      expect(payload.replyDraft).toContain("need the order number or tracking number");
+      expect(getBootstrap).not.toHaveBeenCalled();
+      expect(logger.info).toHaveBeenCalledWith(
+        "ai",
+        "ollamaReplyDraftRequestStarted",
+        expect.objectContaining({
+          context: "/api/ai/draft-reply",
+          provider: "ollama",
+          model: "qwen2.5:3b",
+        }),
+      );
+      expect(logger.info).toHaveBeenCalledWith(
+        "ai",
+        "ollamaReplyDraftParsed",
+        expect.objectContaining({
+          replyDraftLength: expect.any(Number),
+        }),
+      );
+    } finally {
+      await closeTestServer(server);
+    }
+  });
+
+  it("rejects AI reply drafts for suppressed vendor work", async () => {
+    process.env.ACTION_DESK_AI_ENABLED = "true";
+    const handler = createRequestHandler({
+      distDir: path.resolve("."),
+      databasePath: path.resolve("tmp-shared.sqlite"),
+      store: {},
+      logger: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      },
+      authProvider: {},
+    });
+    const { server, origin } = await startTestServer(handler);
+
+    try {
+      const response = await nativeFetch(`${origin}/api/ai/draft-reply`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          subject: "Quick chat?",
+          from: "vendor@example.com",
+          body: "Are you open to a quick chat?",
+          analysis: {
+            intent: "general_support",
+            summary: "Vendor sales outreach.",
+            nextAction: "Mark not relevant.",
+            actionability: "no_action_needed",
+            replyNeeded: "no",
+            workType: "vendor",
+            messageType: "awareness_only",
+            risks: [],
+          },
+          recommendedNextAction: "Mark not relevant.",
+        }),
+      });
+      const payload = (await response.json()) as {
+        error?: { code?: string };
+      };
+
+      expect(response.status).toBe(400);
+      expect(payload.error?.code).toBe("ai_reply_ineligible");
     } finally {
       await closeTestServer(server);
     }

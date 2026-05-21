@@ -39,9 +39,19 @@ async function runActionDesk(email, options) {
         ...refinedAnalysis,
         nextAction,
     };
-    const replyDraft = includeReplyDraft
+    const rulesReplyDraft = includeReplyDraft
         ? (0, generateReply_1.generateReply)(nextAnalysis, orderContext)
         : "";
+    const aiReplyDraft = includeReplyDraft
+        ? await (0, aiService_1.draftReplyWithSource)(email, {
+            aiInput: options?.aiInput,
+            analysis: nextAnalysis,
+            orderContext,
+            rulesReplyDraft,
+        })
+        : undefined;
+    const replyDraft = aiReplyDraft?.replyDraft ?? rulesReplyDraft;
+    const replyDraftSource = aiReplyDraft ? "ai" : "rules";
     const priorityResult = (0, priorityScore_1.computePriorityScore)(nextAnalysis, orderContext);
     return {
         analysis: nextAnalysis,
@@ -49,6 +59,7 @@ async function runActionDesk(email, options) {
         aiClassification,
         orderContext,
         replyDraft,
+        replyDraftSource,
         priorityScore: priorityResult.score,
         priorityBreakdown: priorityResult.breakdown,
         warning: refinedAnalysis.orderNumber &&

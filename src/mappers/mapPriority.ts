@@ -37,7 +37,10 @@ export function mapActionDeskResultToPriorityReasons(
 ): QueuePriorityReason[] {
   const reasons = new Set<QueuePriorityReason>();
 
-  if (result.analysis.replyNeeded === "yes") {
+  if (
+    result.analysis.replyNeeded === "yes" ||
+    result.analysis.replyNeeded === "recommended"
+  ) {
     reasons.add("customer_follow_up");
   }
 

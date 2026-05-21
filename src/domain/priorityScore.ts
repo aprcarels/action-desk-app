@@ -69,7 +69,10 @@ export function computePriorityScore(
     addPoints("Informational message", -10);
   }
 
-  if (analysis.replyNeeded === "yes") {
+  if (
+    analysis.replyNeeded === "yes" ||
+    analysis.replyNeeded === "recommended"
+  ) {
     addPoints("Customer reply needed", 10);
   } else if (analysis.replyNeeded === "no") {
     addPoints("No customer reply needed", -10);

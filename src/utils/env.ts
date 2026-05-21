@@ -6,6 +6,7 @@ type EnvKey =
   | "OLLAMA_BASE_URL"
   | "OLLAMA_MODEL"
   | "OLLAMA_TIMEOUT_MS"
+  | "ACTION_DESK_AI_REPLY_DRAFTS_ENABLED"
   | "DEV"
   | "VITE_INBOX_SOURCE"
   | "VITE_PILOT_MODE"
@@ -16,6 +17,7 @@ type EnvKey =
   | "VITE_USE_PERSISTED_QUEUE"
   | "VITE_GROUP_INBOX_ADDRESSES"
   | "VITE_AI_CLASSIFICATION_ENABLED"
+  | "VITE_AI_REPLY_DRAFTS_ENABLED"
   | "VITE_SHOW_DEBUG_UI";
 
 type RuntimeEnvSource = Record<string, string | boolean | undefined>;

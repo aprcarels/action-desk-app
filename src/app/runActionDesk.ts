@@ -1,6 +1,9 @@
 import type { ActionDeskResult } from "../types/actionDesk";
 import { computePriorityScore } from "../domain/priorityScore";
-import { analyzeEmailWithSource } from "../services/aiService";
+import {
+  analyzeEmailWithSource,
+  draftReplyWithSource,
+} from "../services/aiService";
 import { generateRecommendedAction } from "../services/generateRecommendedAction";
 import { generateReply } from "../services/generateReply";
 import { getOrderContextProvider } from "../services/orderContextProvider";
@@ -53,9 +56,19 @@ export async function runActionDesk(
     nextAction,
   };
 
-  const replyDraft = includeReplyDraft
+  const rulesReplyDraft = includeReplyDraft
     ? generateReply(nextAnalysis, orderContext)
     : "";
+  const aiReplyDraft = includeReplyDraft
+    ? await draftReplyWithSource(email, {
+        aiInput: options?.aiInput,
+        analysis: nextAnalysis,
+        orderContext,
+        rulesReplyDraft,
+      })
+    : undefined;
+  const replyDraft = aiReplyDraft?.replyDraft ?? rulesReplyDraft;
+  const replyDraftSource = aiReplyDraft ? "ai" : "rules";
 
   const priorityResult = computePriorityScore(nextAnalysis, orderContext);
 
@@ -65,6 +78,7 @@ export async function runActionDesk(
     aiClassification,
     orderContext,
     replyDraft,
+    replyDraftSource,
     priorityScore: priorityResult.score,
     priorityBreakdown: priorityResult.breakdown,
     warning:

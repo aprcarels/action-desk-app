@@ -58,7 +58,8 @@ function computePriorityScore(analysis, orderContext) {
     else if (analysis.messageType === "informational") {
         addPoints("Informational message", -10);
     }
-    if (analysis.replyNeeded === "yes") {
+    if (analysis.replyNeeded === "yes" ||
+        analysis.replyNeeded === "recommended") {
         addPoints("Customer reply needed", 10);
     }
     else if (analysis.replyNeeded === "no") {

@@ -389,10 +389,16 @@ export default function TaskPaneApp() {
               >
                 <h2 style={{ ...sectionTitleStyle, margin: 0 }}>Reply Draft</h2>
                 <span
-                  title={getDraftSourceDisclosure(taskPaneState.result.analysisSource).detail}
+                  title={getDraftSourceDisclosure(
+                    taskPaneState.result.replyDraftSource ??
+                      taskPaneState.result.analysisSource,
+                  ).detail}
                   style={sourceDisclosureBadgeStyle}
                 >
-                  Draft: {getDraftSourceDisclosure(taskPaneState.result.analysisSource).label}
+                  Draft: {getDraftSourceDisclosure(
+                    taskPaneState.result.replyDraftSource ??
+                      taskPaneState.result.analysisSource,
+                  ).label}
                 </span>
                 <button
                   type="button"

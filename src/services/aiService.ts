@@ -1,7 +1,9 @@
 import type {
+  AiReplyDraft,
   AiEmailClassification,
   EmailAnalysis,
   AnalysisSource,
+  OrderContext,
 } from "../types/actionDesk";
 import { getEnv } from "../utils/env";
 import { analyzeEmail } from "./analyzeEmail";
@@ -10,7 +12,12 @@ import {
   normalizeAiEmailClassification,
   type AiClassifyEmailRequest,
 } from "./aiEmailClassification";
-import { classifyEmailWithAi } from "./sharedWorkflowApi";
+import {
+  canRequestAiReplyDraft,
+  normalizeAiReplyDraft,
+  type AiDraftReplyRequest,
+} from "./aiReplyDraft";
+import { classifyEmailWithAi, draftReplyWithAi } from "./sharedWorkflowApi";
 
 type AnalyzeEmailWithSourceResult = {
   analysis: EmailAnalysis;
@@ -20,6 +27,12 @@ type AnalyzeEmailWithSourceResult = {
 
 type AnalyzeEmailWithSourceOptions = {
   aiInput?: Partial<AiClassifyEmailRequest>;
+};
+
+type DraftReplyWithSourceOptions = AnalyzeEmailWithSourceOptions & {
+  analysis: EmailAnalysis;
+  orderContext?: OrderContext;
+  rulesReplyDraft: string;
 };
 
 const DEFAULT_CLIENT_AI_TIMEOUT_MS = 5500;
@@ -74,6 +87,14 @@ function isAiClassificationEnabled(): boolean {
   );
 }
 
+function isAiReplyDraftingEnabled(): boolean {
+  return !(
+    isDisabledValue(getEnv("VITE_AI_REPLY_DRAFTS_ENABLED")) ||
+    isDisabledValue(getEnv("ACTION_DESK_AI_REPLY_DRAFTS_ENABLED")) ||
+    isDisabledValue(getEnv("ACTION_DESK_AI_ENABLED"))
+  );
+}
+
 function withTimeout<T>(
   promise: Promise<T>,
   timeoutMs: number,
@@ -106,6 +127,22 @@ function buildAiRequest(
     subject: (options?.aiInput?.subject ?? parsedInput.subject).trim(),
     from: (options?.aiInput?.from ?? "").trim(),
     body: ((options?.aiInput?.body ?? parsedInput.body) || email).trim(),
+  };
+}
+
+function buildAiReplyDraftRequest(
+  email: string,
+  options: DraftReplyWithSourceOptions,
+): AiDraftReplyRequest {
+  const parsedInput = parseAnalysisInput(email);
+
+  return {
+    subject: (options.aiInput?.subject ?? parsedInput.subject).trim(),
+    from: (options.aiInput?.from ?? "").trim(),
+    body: ((options.aiInput?.body ?? parsedInput.body) || email).trim(),
+    analysis: options.analysis,
+    orderContext: options.orderContext,
+    recommendedNextAction: options.analysis.nextAction,
   };
 }
 
@@ -168,4 +205,61 @@ export async function analyzeEmailWithSource(
     analysisSource: aiClassification ? "hybrid" : "fallback",
     aiClassification,
   };
+}
+
+export async function draftReplyWithSource(
+  email: string,
+  options: DraftReplyWithSourceOptions,
+): Promise<AiReplyDraft | undefined> {
+  if (!canRequestAiReplyDraft(options.analysis, options.rulesReplyDraft)) {
+    logAiDiagnostic("info", "aiReplyDraftSkipped", {
+      reason: "not_eligible",
+      source: "client",
+      workType: options.analysis.workType,
+      actionability: options.analysis.actionability,
+      replyNeeded: options.analysis.replyNeeded,
+    });
+    return undefined;
+  }
+
+  if (!isAiReplyDraftingEnabled()) {
+    logAiDiagnostic("info", "aiReplyDraftSkipped", {
+      reason: "disabled",
+      source: "client",
+    });
+    return undefined;
+  }
+
+  const request = buildAiReplyDraftRequest(email, options);
+
+  try {
+    const response = await withTimeout(
+      draftReplyWithAi(request),
+      DEFAULT_CLIENT_AI_TIMEOUT_MS,
+    );
+    const draft = normalizeAiReplyDraft(response, request);
+
+    if (!draft) {
+      logAiDiagnostic("warn", "aiReplyDraftFallback", {
+        reason: "invalid_or_ungrounded_ai_reply_draft",
+        source: "client",
+      });
+      return undefined;
+    }
+
+    logAiDiagnostic("info", "aiReplyDraftReceived", {
+      source: "client",
+      provider: draft.aiSource,
+      replyDraftLength: draft.replyDraft.length,
+    });
+
+    return draft;
+  } catch (error) {
+    logAiDiagnostic("warn", "aiReplyDraftFallback", {
+      reason: "ai_reply_route_unavailable",
+      source: "client",
+      ...getErrorDiagnostic(error),
+    });
+    return undefined;
+  }
 }

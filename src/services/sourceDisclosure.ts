@@ -1,4 +1,4 @@
-import type { AnalysisSource } from "../types/actionDesk";
+import type { AnalysisSource, ReplyDraftSource } from "../types/actionDesk";
 
 export type SourceDisclosureKind =
   | "rules_based"
@@ -12,6 +12,7 @@ export type SourceDisclosure = {
 };
 
 type SourceValue = AnalysisSource | null | undefined;
+type DraftSourceValue = AnalysisSource | ReplyDraftSource | null | undefined;
 
 export function getAnalysisSourceDisclosure(
   source: SourceValue,
@@ -47,14 +48,21 @@ export function getAnalysisSourceDisclosure(
   }
 }
 
-export function getDraftSourceDisclosure(source: SourceValue): SourceDisclosure {
+export function getDraftSourceDisclosure(source: DraftSourceValue): SourceDisclosure {
   switch (source) {
     case "ai":
       return {
         kind: "ai_assisted",
         label: "AI Assisted",
         detail:
-          "Draft uses Action Desk reply templates; AI classification is assistive context only.",
+          "Draft was produced by the assistive AI reply drafting layer; Action Desk rules remain authoritative.",
+      };
+    case "rules":
+      return {
+        kind: "rules_based",
+        label: "Rules-Based",
+        detail:
+          "Draft was produced by deterministic reply templates and available order context.",
       };
     case "hybrid":
       return {

@@ -1,5 +1,6 @@
 import type { PriorityBand, QueuePriorityReason } from "./queuePriority";
 import type { QueueWorkStatus } from "./queueStatus";
+import type { ReplyDraftSource } from "../../types/actionDesk";
 
 export type QueueItem = {
   id: string;
@@ -22,6 +23,7 @@ export type QueueItem = {
   summary?: string | null;
   recommendedAction?: string | null;
   replyDraft?: string | null;
+  replyDraftSource?: ReplyDraftSource | null;
   warnings: string[];
   isActive: boolean;
   isResolved: boolean;

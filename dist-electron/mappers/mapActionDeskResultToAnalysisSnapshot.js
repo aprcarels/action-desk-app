@@ -60,6 +60,7 @@ function mapActionDeskResultToAnalysisSnapshot(options) {
         summary: result.analysis.summary || null,
         recommendedAction: result.analysis.nextAction || null,
         replyDraft: result.replyDraft || null,
+        replyDraftSource: result.replyDraftSource ?? (result.replyDraft ? "rules" : null),
         warnings: result.warning ? [result.warning] : [],
         analysisSource: mapCurrentAnalysisSource(result.analysisSource),
         aiClassification: result.aiClassification

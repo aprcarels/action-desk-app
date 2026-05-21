@@ -9,6 +9,7 @@ const priorityScore_1 = require("../domain/priorityScore");
 const emailWorkHeuristics_1 = require("./emailWorkHeuristics");
 const generateRecommendedAction_1 = require("./generateRecommendedAction");
 const generateReply_1 = require("./generateReply");
+const aiReplyDraft_1 = require("./aiReplyDraft");
 const CUSTOMER_SUPPORT_PATTERNS = [
     "where is my order",
     "order",
@@ -231,7 +232,8 @@ function hasDirectCustomerSignals(text, analysis) {
 }
 function hasActionableRequestSignals(text, analysis) {
     return ((0, emailWorkHeuristics_1.hasClearRequest)(text) ||
-        Boolean(analysis?.replyNeeded === "yes") ||
+        Boolean(analysis?.replyNeeded === "yes" ||
+            analysis?.replyNeeded === "recommended") ||
         Boolean(analysis?.actionability === "action_required"));
 }
 function hasCustomerTopicSignals(text, analysis) {
@@ -429,13 +431,18 @@ function normalizeProcessedEmailResult(email, result) {
         ...analysis,
         nextAction,
     };
-    const replyDraft = (0, generateReply_1.generateReply)(nextAnalysis, orderContext);
+    const rulesReplyDraft = (0, generateReply_1.generateReply)(nextAnalysis, orderContext);
+    const keepAiReplyDraft = result.replyDraftSource === "ai" &&
+        result.replyDraft.trim().length > 0 &&
+        (0, aiReplyDraft_1.canRequestAiReplyDraft)(nextAnalysis, rulesReplyDraft || result.replyDraft);
+    const replyDraft = keepAiReplyDraft ? result.replyDraft : rulesReplyDraft;
     const priorityResult = (0, priorityScore_1.computePriorityScore)(nextAnalysis, orderContext);
     return {
         ...result,
         analysis: nextAnalysis,
         orderContext,
         replyDraft,
+        replyDraftSource: keepAiReplyDraft ? "ai" : "rules",
         priorityScore: priorityResult.score,
         priorityBreakdown: priorityResult.breakdown,
         warning: nextAnalysis.orderNumber &&

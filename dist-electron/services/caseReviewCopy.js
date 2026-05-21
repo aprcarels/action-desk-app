@@ -50,6 +50,7 @@ function getActionabilityLabel(actionability) {
 function getReplyNeededLabel(replyNeeded) {
     switch (replyNeeded) {
         case "yes":
+        case "recommended":
             return "Reply recommended";
         case "no":
             return "Reply not recommended";

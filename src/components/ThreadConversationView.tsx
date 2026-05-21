@@ -55,6 +55,7 @@ function getReplyNeededLabel(
 ): string {
   switch (replyNeeded) {
     case "yes":
+    case "recommended":
       return "Reply recommended";
     case "no":
       return "Reply not recommended";
@@ -105,7 +106,9 @@ export function ThreadConversationView({
 
   const draftIssueType = deriveIssueType(result.analysis, result.orderContext);
   const analysisSourceDisclosure = getAnalysisSourceDisclosure(result.analysisSource);
-  const draftSourceDisclosure = getDraftSourceDisclosure(result.analysisSource);
+  const draftSourceDisclosure = getDraftSourceDisclosure(
+    result.replyDraftSource ?? result.analysisSource,
+  );
   const aiClassification = result.aiClassification;
   const olderMessages = thread.items.filter((threadItem) => threadItem.email.id !== item.email.id);
   const replyDraftUnavailable =

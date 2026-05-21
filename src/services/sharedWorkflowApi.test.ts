@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   classifyEmailWithAi,
+  draftReplyWithAi,
   createOutlookReplyDraft,
   createSharedWorkflowBackup,
   getSharedWorkflowErrorMessage,
@@ -190,6 +191,52 @@ describe("sharedWorkflowApi", () => {
     expect(JSON.parse(String(requestInit?.body))).toMatchObject({
       subject: "RE: AP Express Logistics priorities",
       from: "casey@duagon.example",
+    });
+  });
+
+  it("sends AI reply drafting to the configured backend API route", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        replyDraft: "Hi,\n\nPlease send the order number so I can check the shipment.\n\nBest,\nSupport Team",
+        aiSource: "ollama",
+      }),
+    });
+
+    setBackendApiOrigin("http://192.168.15.177:4000/");
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await draftReplyWithAi({
+      subject: "Where is my order?",
+      from: "customer@example.com",
+      body: "Where is my order?",
+      analysis: {
+        summary: "Customer is asking for an order update but did not provide a usable identifier.",
+        intent: "where_is_my_order",
+        urgency: "medium",
+        confidence: "medium",
+        risks: [],
+        nextAction: "Request the order number or usable reference for the shipment status request.",
+        actionability: "action_required",
+        replyNeeded: "yes",
+        workType: "customer_support",
+        messageType: "customer_request",
+      },
+      recommendedNextAction: "Request the order number or usable reference for the shipment status request.",
+    });
+    const [requestUrl, requestInit] = fetchMock.mock.calls[0] ?? [];
+    const url = new URL(String(requestUrl));
+
+    expect(result).toMatchObject({
+      aiSource: "ollama",
+    });
+    expect(url.origin).toBe("http://192.168.15.177:4000");
+    expect(url.pathname).toBe("/api/ai/draft-reply");
+    expect(requestInit?.method).toBe("POST");
+    expect(JSON.parse(String(requestInit?.body))).toMatchObject({
+      subject: "Where is my order?",
+      from: "customer@example.com",
+      recommendedNextAction: expect.stringContaining("Request the order number"),
     });
   });
 

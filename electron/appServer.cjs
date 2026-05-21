@@ -10,6 +10,7 @@ const {
 } = require("./sharedAuthPolicy.cjs");
 const {
   classifyEmailWithOllama,
+  draftReplyWithOllama,
 } = require("./ollamaEmailClassifier.cjs");
 
 const DEFAULT_HOST = "localhost";
@@ -1719,6 +1720,111 @@ async function handleAiClassificationRoute(req, res, logger, backendApi) {
       message,
       retryable: error?.retryable ?? statusCode >= 500,
       context: "/api/ai/classify-email",
+      details: error?.details,
+    });
+  }
+
+  return true;
+}
+
+async function handleAiReplyDraftRoute(req, res, logger, backendApi) {
+  if (req.method !== "POST") {
+    sendApiError(req, res, 405, {
+      code: "method_not_allowed",
+      message: "AI reply drafting only supports POST.",
+      retryable: false,
+      context: "/api/ai/draft-reply",
+    });
+    return true;
+  }
+
+  try {
+    const body = await readRequestBody(req);
+
+    if (hasBackendApi(backendApi)) {
+      try {
+        logger?.info?.("ai", "Forwarding AI reply drafting to backend API.", {
+          context: "/api/ai/draft-reply",
+          backendApiUrl: backendApi.baseUrl,
+        });
+
+        const draft = await backendApi.requestJson("/api/ai/draft-reply", {
+          method: "POST",
+          body,
+        });
+
+        logger?.info?.("ai", "Backend AI reply drafting completed.", {
+          context: "/api/ai/draft-reply",
+          backendApiUrl: backendApi.baseUrl,
+          replyDraftLength: draft?.replyDraft?.length,
+          aiSource: draft?.aiSource,
+        });
+
+        sendJson(req, res, 200, draft);
+        return true;
+      } catch (backendError) {
+        logger?.warn?.("ai", "Backend AI reply drafting unavailable; falling back to local Ollama.", {
+          context: "/api/ai/draft-reply",
+          backendApiUrl: backendApi.baseUrl,
+          code: backendError?.code,
+          statusCode: backendError?.statusCode,
+          message: backendError instanceof Error ? backendError.message : String(backendError),
+        });
+      }
+    }
+
+    logger?.info?.("ai", "AI reply draft route called.", {
+      context: "/api/ai/draft-reply",
+      provider: "ollama",
+    });
+    const draft = await draftReplyWithOllama(body, {
+      onDiagnostic(diagnostic) {
+        const level = diagnostic?.level === "warn" ? "warn" : "info";
+        const event = diagnostic?.event || "ollamaReplyDraftDiagnostic";
+        const metadata =
+          diagnostic && typeof diagnostic.metadata === "object"
+            ? diagnostic.metadata
+            : {};
+
+        logger?.[level]?.("ai", event, {
+          context: "/api/ai/draft-reply",
+          provider: "ollama",
+          ...metadata,
+        });
+      },
+    });
+
+    logger?.info?.("ai", "AI reply draft route completed.", {
+      context: "/api/ai/draft-reply",
+      provider: "ollama",
+      replyDraftLength: draft.replyDraft.length,
+      aiSource: draft.aiSource,
+    });
+
+    sendJson(req, res, 200, draft);
+  } catch (error) {
+    const statusCode = Number.isInteger(error?.statusCode)
+      ? error.statusCode
+      : 503;
+    const code = error?.code ?? "ai_reply_unavailable";
+    const message =
+      error instanceof Error
+        ? error.message
+        : "AI reply drafting is unavailable.";
+
+    logger?.warn?.("ai", "AI reply draft route failed.", {
+      code,
+      statusCode,
+      error: message,
+      fallbackReason: code,
+      context: "/api/ai/draft-reply",
+      details: error?.details,
+    });
+    sendApiError(req, res, statusCode, {
+      code,
+      message,
+      retryable: error?.retryable ?? statusCode >= 500,
+      context: "/api/ai/draft-reply",
       details: error?.details,
     });
   }
@@ -6090,6 +6196,11 @@ function createRequestHandler(options) {
 
     if (requestUrl.pathname === "/api/ai/classify-email") {
       await handleAiClassificationRoute(req, res, logger, backendApi);
+      return;
+    }
+
+    if (requestUrl.pathname === "/api/ai/draft-reply") {
+      await handleAiReplyDraftRoute(req, res, logger, backendApi);
       return;
     }
 

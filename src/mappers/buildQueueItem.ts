@@ -39,6 +39,7 @@ export function buildQueueItem(options: {
     summary: snapshot.summary ?? null,
     recommendedAction: snapshot.recommendedAction ?? null,
     replyDraft: snapshot.replyDraft ?? null,
+    replyDraftSource: snapshot.replyDraftSource ?? null,
     warnings: [...snapshot.warnings],
     isActive,
     isResolved,

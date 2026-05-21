@@ -15,6 +15,7 @@ import {
 } from "./emailWorkHeuristics";
 import { generateRecommendedAction } from "./generateRecommendedAction";
 import { generateReply } from "./generateReply";
+import { canRequestAiReplyDraft } from "./aiReplyDraft";
 import type {
   ActionDeskResult,
   EmailAnalysis,
@@ -290,7 +291,10 @@ function hasDirectCustomerSignals(text: string, analysis?: EmailAnalysis): boole
 function hasActionableRequestSignals(text: string, analysis?: EmailAnalysis): boolean {
   return (
     hasClearRequest(text) ||
-    Boolean(analysis?.replyNeeded === "yes") ||
+    Boolean(
+      analysis?.replyNeeded === "yes" ||
+        analysis?.replyNeeded === "recommended",
+    ) ||
     Boolean(analysis?.actionability === "action_required")
   );
 }
@@ -553,7 +557,12 @@ export function normalizeProcessedEmailResult(
     ...analysis,
     nextAction,
   };
-  const replyDraft = generateReply(nextAnalysis, orderContext);
+  const rulesReplyDraft = generateReply(nextAnalysis, orderContext);
+  const keepAiReplyDraft =
+    result.replyDraftSource === "ai" &&
+    result.replyDraft.trim().length > 0 &&
+    canRequestAiReplyDraft(nextAnalysis, rulesReplyDraft || result.replyDraft);
+  const replyDraft = keepAiReplyDraft ? result.replyDraft : rulesReplyDraft;
   const priorityResult = computePriorityScore(nextAnalysis, orderContext);
 
   return {
@@ -561,6 +570,7 @@ export function normalizeProcessedEmailResult(
     analysis: nextAnalysis,
     orderContext,
     replyDraft,
+    replyDraftSource: keepAiReplyDraft ? "ai" : "rules",
     priorityScore: priorityResult.score,
     priorityBreakdown: priorityResult.breakdown,
     warning:

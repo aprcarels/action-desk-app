@@ -33,6 +33,10 @@ describe("sourceDisclosure", () => {
       label: "Rules-Based",
       kind: "rules_based",
     });
+    expect(getDraftSourceDisclosure("rules")).toMatchObject({
+      label: "Rules-Based",
+      kind: "rules_based",
+    });
   });
 
   it("fails gracefully when no source was stored", () => {

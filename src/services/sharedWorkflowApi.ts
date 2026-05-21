@@ -16,6 +16,7 @@ import type {
   WorkflowState,
 } from "../types/actionDesk";
 import type { AiClassifyEmailRequest } from "./aiEmailClassification";
+import type { AiDraftReplyRequest } from "./aiReplyDraft";
 import { getEnv } from "../utils/env";
 import {
   normalizeManagedUsers,
@@ -374,6 +375,35 @@ export async function classifyEmailWithAi(
   }
 
   return requestJson("/api/ai/classify-email", {
+    method: "POST",
+    body: input,
+  });
+}
+
+export async function draftReplyWithAi(
+  input: AiDraftReplyRequest,
+): Promise<{ replyDraft: string; aiSource: "ollama" }> {
+  const backendOrigin = getConfiguredBackendApiOrigin();
+
+  if (backendOrigin) {
+    try {
+      return await requestJsonFromOrigin(backendOrigin, "/api/ai/draft-reply", {
+        method: "POST",
+        body: input,
+      });
+    } catch (error) {
+      try {
+        return await requestJson("/api/ai/draft-reply", {
+          method: "POST",
+          body: input,
+        });
+      } catch {
+        throw error;
+      }
+    }
+  }
+
+  return requestJson("/api/ai/draft-reply", {
     method: "POST",
     body: input,
   });

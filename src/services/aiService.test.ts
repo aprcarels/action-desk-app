@@ -1,17 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { analyzeEmailWithSource } from "./aiService";
 import { buildAnalysisInput } from "./analysisInput";
-import { classifyEmailWithAi } from "./sharedWorkflowApi";
+import { classifyEmailWithAi, draftReplyWithAi } from "./sharedWorkflowApi";
 
 vi.mock("./sharedWorkflowApi", () => ({
   classifyEmailWithAi: vi.fn(),
+  draftReplyWithAi: vi.fn(),
 }));
 
 const classifyEmailWithAiMock = vi.mocked(classifyEmailWithAi);
+const draftReplyWithAiMock = vi.mocked(draftReplyWithAi);
 
 describe("analyzeEmailWithSource", () => {
   beforeEach(() => {
     classifyEmailWithAiMock.mockReset();
+    draftReplyWithAiMock.mockReset();
   });
 
   afterEach(() => {

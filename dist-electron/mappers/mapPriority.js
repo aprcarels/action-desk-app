@@ -23,7 +23,8 @@ function mapPriorityScoreToBand(priorityScore) {
 }
 function mapActionDeskResultToPriorityReasons(result) {
     const reasons = new Set();
-    if (result.analysis.replyNeeded === "yes") {
+    if (result.analysis.replyNeeded === "yes" ||
+        result.analysis.replyNeeded === "recommended") {
         reasons.add("customer_follow_up");
     }
     if (result.analysis.messageType === "customer_request" && result.analysis.actionability === "action_required") {

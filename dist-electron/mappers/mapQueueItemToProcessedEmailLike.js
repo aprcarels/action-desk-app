@@ -64,6 +64,7 @@ function mapQueueItemToProcessedEmailLike(options) {
             : undefined,
         orderContext: mapQueueItemToOrderContext(queueItem),
         replyDraft: queueItem.replyDraft ?? snapshot.replyDraft ?? "",
+        replyDraftSource: queueItem.replyDraftSource ?? snapshot.replyDraftSource ?? "rules",
         priorityScore: queueItem.priorityScore,
         priorityBreakdown: queueItem.priorityReasons.map((reason) => ({
             label: reason,

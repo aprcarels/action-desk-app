@@ -52,7 +52,7 @@ export type Actionability =
   | "no_action_needed"
   | "review_needed";
 
-export type ReplyNeeded = "yes" | "no" | "maybe";
+export type ReplyNeeded = "yes" | "recommended" | "no" | "maybe";
 
 export type CaseIdentifierKind =
   | "order"
@@ -357,6 +357,7 @@ export type EmailAnalysis = {
 };
 
 export type AnalysisSource = "ai" | "fallback" | "heuristic" | "hybrid";
+export type ReplyDraftSource = "ai" | "rules";
 
 export type AiEmailClassificationCategory =
   | "customer support request"
@@ -378,6 +379,11 @@ export type AiEmailClassification = {
   urgency: "low" | "medium" | "high";
   summary: string;
   confidence: number;
+  aiSource: "ollama";
+};
+
+export type AiReplyDraft = {
+  replyDraft: string;
   aiSource: "ollama";
 };
 
@@ -438,6 +444,7 @@ export type ActionDeskResult = {
   aiClassification?: AiEmailClassification;
   orderContext?: OrderContext;
   replyDraft: string;
+  replyDraftSource?: ReplyDraftSource;
   priorityScore: number;
   priorityBreakdown?: PriorityBreakdownItem[];
   warning?: string;

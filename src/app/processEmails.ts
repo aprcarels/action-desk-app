@@ -493,6 +493,7 @@ export function refreshProcessedEmailReplyDraft(
           result: {
             ...item.result,
             replyDraft,
+            replyDraftSource: "rules",
           },
         }
       : item,

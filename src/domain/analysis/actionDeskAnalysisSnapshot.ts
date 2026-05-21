@@ -1,5 +1,5 @@
 import type { PriorityBand, QueuePriorityReason } from "../queue/queuePriority";
-import type { AiEmailClassification } from "../../types/actionDesk";
+import type { AiEmailClassification, ReplyDraftSource } from "../../types/actionDesk";
 
 export type AnalysisSource = "heuristic" | "ai" | "hybrid";
 
@@ -25,6 +25,7 @@ export type ActionDeskAnalysisSnapshot = {
   summary?: string | null;
   recommendedAction?: string | null;
   replyDraft?: string | null;
+  replyDraftSource?: ReplyDraftSource | null;
   warnings: string[];
   analysisSource: AnalysisSource;
   aiClassification?: AiEmailClassification;

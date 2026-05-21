@@ -6,6 +6,7 @@ interface ImportMetaEnv {
   readonly OLLAMA_BASE_URL?: string;
   readonly OLLAMA_MODEL?: string;
   readonly OLLAMA_TIMEOUT_MS?: string;
+  readonly ACTION_DESK_AI_REPLY_DRAFTS_ENABLED?: "true" | "false";
   readonly VITE_INBOX_SOURCE?: "dev" | "api";
   readonly VITE_PILOT_MODE?: "true" | "false";
   readonly VITE_ORDER_CONTEXT_SOURCE?: "mock" | "real";
@@ -16,6 +17,7 @@ interface ImportMetaEnv {
   readonly VITE_AZURE_REDIRECT_URI?: string;
   readonly VITE_GROUP_INBOX_ADDRESSES?: string;
   readonly VITE_AI_CLASSIFICATION_ENABLED?: "true" | "false";
+  readonly VITE_AI_REPLY_DRAFTS_ENABLED?: "true" | "false";
   readonly VITE_SHOW_DEBUG_UI?: "true" | "false";
 }
 

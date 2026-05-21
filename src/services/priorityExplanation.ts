@@ -113,7 +113,10 @@ function addFallbackAnalysisReasons(
     return;
   }
 
-  if (analysis.isThreadContinuation && (analysis.hasClearRequest || analysis.replyNeeded === "yes")) {
+  const replyRecommended =
+    analysis.replyNeeded === "yes" || analysis.replyNeeded === "recommended";
+
+  if (analysis.isThreadContinuation && (analysis.hasClearRequest || replyRecommended)) {
     addReason(reasons, seen, "Thread follow-up with a clear current request.");
   }
 
@@ -123,7 +126,7 @@ function addFallbackAnalysisReasons(
     addReason(reasons, seen, "Medium urgency.");
   }
 
-  if (analysis.replyNeeded === "yes") {
+  if (replyRecommended) {
     addReason(reasons, seen, "Customer reply needed.");
   }
 
