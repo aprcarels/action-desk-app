@@ -8,6 +8,8 @@ export type IntentCode =
   | "damaged_shipment"
   | "address_change"
   | "billing_question"
+  | "missed_pickups_report"
+  | "operational_exception"
   | "operational_confirmation"
   | "operational_logistics_scheduling"
   | "routing_coordination"
@@ -364,6 +366,8 @@ export type AiEmailClassificationCategory =
   | "order/shipment issue"
   | "billing/refund"
   | "operational logistics scheduling"
+  | "missed pickups report"
+  | "operational exception"
   | "routing coordination"
   | "carrier pickup scheduling"
   | "vendor sales outreach"
@@ -378,6 +382,7 @@ export type AiEmailClassification = {
   actionable: boolean;
   urgency: "low" | "medium" | "high";
   summary: string;
+  taskSuggestion?: string;
   confidence: number;
   aiSource: "ollama";
 };
@@ -394,6 +399,14 @@ export type PilotQueueView =
   | "done"
   | "not_relevant"
   | "all";
+
+export type QueueWorkView =
+  | "work_queue"
+  | "needs_reply"
+  | "review_needed"
+  | "operational_exceptions"
+  | "no_action_suppressed"
+  | "all_processed";
 
 export type PilotWorkflowStatus =
   | "active"

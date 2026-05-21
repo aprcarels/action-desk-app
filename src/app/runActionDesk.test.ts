@@ -143,6 +143,62 @@ describe("runActionDesk AI reply drafting", () => {
     expect(draftReplyWithAiMock).not.toHaveBeenCalled();
   });
 
+  it("classifies Central Transport Dollar General pickup mail as review-only operational logistics", async () => {
+    const body = [
+      "Central Transport scheduled load #458921 for Dollar General.",
+      "Carrier pickup date: 05/21/26.",
+      "Stop #1 pickup time: 08:00. Stop #2 pickup time: 11:30.",
+      "Pickup number: DG-458921. Routing status: routed. CDD 05/24/26.",
+      "Reply if the date/time does not work.",
+    ].join("\n");
+
+    const result = await runActionDesk(
+      buildAnalysisInput({
+        subject: "Central Transport MPU pickup - Dollar General",
+        body,
+      }),
+      {
+        aiInput: {
+          subject: "Central Transport MPU pickup - Dollar General",
+          from: "dispatch@centraltransport.example",
+          body,
+        },
+      },
+    );
+
+    expect(result.analysis).toMatchObject({
+      intent: "operational_logistics_scheduling",
+      actionability: "review_needed",
+      replyNeeded: "no",
+      workType: "customer_support",
+    });
+    expect(result.analysis.nextAction).toBe(
+      "Review pickup/scheduling details. Reply only if schedule conflict or missing pickup details.",
+    );
+    expect(result.replyDraft).toBe("");
+    expect(result.replyDraftSource).toBe("rules");
+    expect(draftReplyWithAiMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps real customer WIMO requests reply-recommended", async () => {
+    draftReplyWithAiMock.mockRejectedValue(new Error("draft offline"));
+
+    const result = await runActionDesk(
+      buildAnalysisInput({
+        subject: "Shipment status for ORD-1002",
+        body: "Hi support, where is my order ORD-1002? Please send the current shipment status.",
+      }),
+    );
+
+    expect(result.analysis).toMatchObject({
+      intent: "where_is_my_order",
+      actionability: "action_required",
+      replyNeeded: "yes",
+      workType: "customer_support",
+    });
+    expect(result.replyDraft).not.toBe("");
+  });
+
   it("falls back to the rules-based template when Ollama is unavailable", async () => {
     draftReplyWithAiMock.mockRejectedValue(new Error("ollama offline"));
 

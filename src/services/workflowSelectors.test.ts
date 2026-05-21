@@ -5,6 +5,7 @@ import {
   calculateWorkflowMetrics,
   calculateRepWorkloadSummaries,
   calculateSupervisorSummaryMetrics,
+  calculateWorkflowProcessingMetrics,
   canViewSupervisorVisibility,
   flattenRepGroupedQueueSections,
   filterWorkflowThreads,
@@ -235,6 +236,219 @@ describe("workflowSelectors", () => {
       },
     });
     expect(unassignedThreads).toEqual([]);
+  });
+
+  it("assigns Central Transport Dollar General pickup review items to the customer CSR", () => {
+    const [thread] = buildWorkflowThreads({
+      items: [
+        buildProcessedEmail({
+          email: {
+            ...buildProcessedEmail().email,
+            id: "central-dollar-general-pickup",
+            senderName: "Central Transport",
+            senderEmail: "dispatch@centraltransport.example",
+            subject: "Central Transport MPU pickup",
+            body: [
+              "Central Transport scheduled load #458921 for Dollar General.",
+              "Carrier pickup date: 05/21/26.",
+              "Stop #1 pickup time: 08:00. Stop #2 pickup time: 11:30.",
+              "Pickup number: DG-458921. Routing status: routed. CDD 05/24/26.",
+              "Reply if the date/time does not work.",
+            ].join("\n"),
+          },
+          result: {
+            ...buildProcessedEmail().result!,
+            analysis: {
+              ...buildProcessedEmail().result!.analysis,
+              summary:
+                "Operational logistics scheduling or routing email. Review pickup details and reply only if alternate scheduling is needed.",
+              intent: "operational_logistics_scheduling",
+              urgency: "medium",
+              actionability: "review_needed",
+              replyNeeded: "no",
+              workType: "customer_support",
+              messageType: "customer_request",
+              nextAction:
+                "Review pickup/scheduling details. Reply only if schedule conflict or missing pickup details.",
+            },
+            replyDraft: "",
+            priorityScore: 40,
+          },
+        }),
+      ],
+      workflowState: baseState,
+      customers: [
+        {
+          id: "customer-dollar-general",
+          name: "Dollar General",
+          emails: [],
+          domains: ["dollargeneral.com"],
+          ownerRepId: reps[1].id,
+          assignedCSRs: [
+            {
+              repId: reps[1].id,
+              assignmentRole: "primary",
+              isActive: true,
+            },
+          ],
+        },
+      ],
+      now,
+    });
+
+    expect(thread).toMatchObject({
+      id: "customer:customer-dollar-general",
+      assignedRepId: reps[1].id,
+      assignedRepName: reps[1].name,
+      assignmentResolution: {
+        assignmentStatus: "assigned",
+        assignmentSource: "customer_body",
+        primaryRepId: reps[1].id,
+        matchType: "body",
+      },
+    });
+    expect(thread?.representativeItem.result?.analysis).toMatchObject({
+      intent: "operational_logistics_scheduling",
+      actionability: "review_needed",
+      replyNeeded: "no",
+    });
+    expect(thread?.representativeItem.result?.replyDraft).toBe("");
+  });
+
+  it("keeps assigned operational review work in My Queue and supervisor All Queue", () => {
+    const [thread] = buildWorkflowThreads({
+      items: [
+        buildProcessedEmail({
+          email: {
+            ...buildProcessedEmail().email,
+            id: "dollar-general-missed-pickups",
+            senderName: "AP Express Shipping",
+            senderEmail: "shipping@apexpress.com",
+            subject: "MISSED PICKUPS 5/20/2026",
+            body: "Attached are the missed pickups for Dollar General tonight.",
+          },
+          result: {
+            ...buildProcessedEmail().result!,
+            analysis: {
+              ...buildProcessedEmail().result!.analysis,
+              intent: "missed_pickups_report",
+              urgency: "high",
+              actionability: "review_needed",
+              replyNeeded: "no",
+              workType: "customer_support",
+              messageType: "internal_alert",
+              nextAction:
+                "Review missed pickup list, confirm affected shipments/customers, and assign follow-up where needed.",
+            },
+            replyDraft: "",
+            priorityScore: 55,
+          },
+        }),
+      ],
+      workflowState: baseState,
+      customers: [
+        {
+          id: "customer-dollar-general",
+          name: "Dollar General",
+          emails: [],
+          domains: [],
+          ownerRepId: reps[1].id,
+          assignedCSRs: [
+            {
+              repId: reps[1].id,
+              assignmentRole: "primary",
+              isActive: true,
+            },
+          ],
+        },
+      ],
+      now,
+    });
+    const threads = thread ? [thread] : [];
+    const myQueueThreads = filterWorkflowThreads({
+      threads,
+      currentRep: reps[1],
+      queueScopeView: "my_queue",
+      statusFilter: "open",
+      searchQuery: "",
+    });
+    const supervisorAllQueueThreads = filterWorkflowThreads({
+      threads,
+      currentRep: reps[2],
+      queueScopeView: "all_emails",
+      statusFilter: "open",
+      searchQuery: "",
+    });
+
+    expect(thread?.assignedRepId).toBe(reps[1].id);
+    expect(thread?.representativeItem.result?.analysis).toMatchObject({
+      intent: "missed_pickups_report",
+      actionability: "review_needed",
+      replyNeeded: "no",
+    });
+    expect(myQueueThreads).toHaveLength(1);
+    expect(supervisorAllQueueThreads).toHaveLength(1);
+  });
+
+  it("does not auto-assign hidden vendor no-action items just because they mention a saved customer", () => {
+    const [thread] = buildWorkflowThreads({
+      items: [
+        buildProcessedEmail({
+          email: {
+            ...buildProcessedEmail().email,
+            id: "vendor-dollar-general",
+            senderName: "Vendor Sales",
+            senderEmail: "sales@vendor.example",
+            subject: "Retail logistics demo",
+            body: [
+              "We help retailers like Dollar General optimize carrier pickup planning.",
+              "Would AP Express be open to a quick demo next week?",
+            ].join("\n"),
+          },
+          result: {
+            ...buildProcessedEmail().result!,
+            analysis: {
+              ...buildProcessedEmail().result!.analysis,
+              summary:
+                "Vendor sales outreach or account-maintenance message. Not a customer-service case.",
+              intent: "general_support",
+              urgency: "low",
+              risks: [],
+              actionability: "no_action_needed",
+              replyNeeded: "no",
+              workType: "vendor",
+              messageType: "internal_alert",
+              nextAction:
+                "No customer-service action needed. Mark not relevant unless an internal owner intentionally wants to review the vendor outreach.",
+            },
+            replyDraft: "",
+            priorityScore: 0,
+          },
+        }),
+      ],
+      workflowState: baseState,
+      customers: [
+        {
+          id: "customer-dollar-general",
+          name: "Dollar General",
+          emails: [],
+          domains: ["dollargeneral.com"],
+          ownerRepId: reps[1].id,
+        },
+      ],
+      now,
+    });
+
+    expect(thread).toMatchObject({
+      id: "customer:customer-dollar-general",
+      assignedRepId: undefined,
+      assignmentResolution: {
+        assignmentStatus: "unassigned",
+        assignmentSource: "none",
+        customerId: "customer-dollar-general",
+        matchType: "body",
+      },
+    });
   });
 
   it("assigns customer work matched from body text to the configured CSR", () => {
@@ -746,6 +960,121 @@ describe("workflowSelectors", () => {
     expect(metrics.totalOpen).toBe(0);
     expect(metrics.snoozed).toBe(1);
     expect(metrics.resolvedToday).toBe(1);
+  });
+
+  it("calculates processing breakdown counts for reply suppression visibility", () => {
+    const metrics = calculateWorkflowProcessingMetrics([
+      buildProcessedEmail({
+        email: {
+          ...buildProcessedEmail().email,
+          id: "wimo",
+        },
+        result: {
+          ...buildProcessedEmail().result!,
+          analysis: {
+            ...buildProcessedEmail().result!.analysis,
+            intent: "where_is_my_order",
+            actionability: "action_required",
+            replyNeeded: "yes",
+            workType: "customer_support",
+          },
+        },
+      }),
+      buildProcessedEmail({
+        email: {
+          ...buildProcessedEmail().email,
+          id: "logistics",
+        },
+        result: {
+          ...buildProcessedEmail().result!,
+          analysis: {
+            ...buildProcessedEmail().result!.analysis,
+            intent: "operational_logistics_scheduling",
+            actionability: "review_needed",
+            replyNeeded: "no",
+            workType: "customer_support",
+          },
+          replyDraft: "",
+        },
+      }),
+      buildProcessedEmail({
+        email: {
+          ...buildProcessedEmail().email,
+          id: "missed-pickups",
+          subject: "MISSED PICKUPS 5/20/2026",
+          body: "Attached are the missed pickups for tonight.",
+        },
+        result: {
+          ...buildProcessedEmail().result!,
+          analysis: {
+            ...buildProcessedEmail().result!.analysis,
+            intent: "missed_pickups_report",
+            actionability: "review_needed",
+            replyNeeded: "no",
+            workType: "customer_support",
+          },
+          replyDraft: "",
+        },
+      }),
+      buildProcessedEmail({
+        email: {
+          ...buildProcessedEmail().email,
+          id: "vendor",
+          subject: "Vendor sales outreach",
+          body: "Can I show AP Express a demo of our logistics software?",
+        },
+        result: {
+          ...buildProcessedEmail().result!,
+          analysis: {
+            ...buildProcessedEmail().result!.analysis,
+            intent: "general_support",
+            actionability: "no_action_needed",
+            replyNeeded: "no",
+            workType: "vendor",
+          },
+          replyDraft: "",
+        },
+      }),
+      buildProcessedEmail({
+        email: {
+          ...buildProcessedEmail().email,
+          id: "internal-eod",
+          subject: "EQISMART - EOD 05-19-26",
+          body: "All orders are on track. Tracking numbers are in Excel.",
+        },
+        result: {
+          ...buildProcessedEmail().result!,
+          analysis: {
+            ...buildProcessedEmail().result!.analysis,
+            intent: "general_support",
+            actionability: "no_action_needed",
+            replyNeeded: "no",
+            workType: "internal",
+          },
+          replyDraft: "",
+        },
+      }),
+    ]);
+
+    expect(metrics).toEqual({
+      totalLoaded: 5,
+      totalProcessed: 5,
+      visibleQueueItems: 5,
+      hiddenByPilotState: 0,
+      hiddenByStatusFilter: 0,
+      hiddenAsVendorSpamNoise: 1,
+      hiddenAsNoAction: 2,
+      replyRecommended: 1,
+      reviewNeeded: 2,
+      noActionNeeded: 2,
+      vendorSuppressed: 1,
+      internalOperational: 1,
+      operationalLogistics: 1,
+      operationalExceptions: 1,
+      reviewNeededOperationalItems: 2,
+      unassignedItems: 0,
+      assignedReviewNeededItems: 0,
+    });
   });
 
   it("attaches active thread presence and ignores expired presence", () => {

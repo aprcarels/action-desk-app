@@ -457,13 +457,53 @@ describe("customerServiceMail", () => {
     expect(normalized.analysis.replyNeeded).toBe("no");
     expect(normalized.analysis.risks).toEqual([]);
     expect(normalized.analysis.nextAction).toBe(
-      "Review scheduled pickup details and confirm whether the date/time works. Reply only if alternate scheduling or pickup details are needed.",
+      "Review pickup/scheduling details. Reply only if schedule conflict or missing pickup details.",
     );
     expect(normalized.analysis.nextAction.toLowerCase()).not.toContain("invoice");
     expect(normalized.analysis.nextAction.toLowerCase()).not.toContain("order number");
     expect(normalized.replyDraft).toBe("");
     expect(normalized.priorityScore).toBeGreaterThanOrEqual(40);
     expect(normalized.priorityScore).toBeLessThan(70);
+  });
+
+  it("keeps missed pickup reports visible as no-reply operational review work", () => {
+    const email = buildEmail({
+      senderName: "AP Express Shipping",
+      senderEmail: "shipping@apexpress.com",
+      subject: "MISSED PICKUPS 5/20/2026",
+      body: "Attached are the missed pickups for tonight.",
+      previewText: "Attached are the missed pickups for tonight.",
+    });
+
+    const normalized = normalizeProcessedEmailResult(
+      email,
+      buildResult({
+        analysis: {
+          ...buildResult().analysis,
+          intent: "where_is_my_order",
+          urgency: "medium",
+          orderNumber: undefined,
+          risks: ["delay_or_no_tracking_update"],
+          summary: "Customer is asking for an order update but did not provide a usable identifier.",
+          nextAction:
+            "Request the order number or usable reference for the shipment status request.",
+        },
+      }),
+    );
+
+    expect(normalized.analysis.intent).toBe("missed_pickups_report");
+    expect(normalized.analysis.workType).toBe("customer_support");
+    expect(normalized.analysis.actionability).toBe("review_needed");
+    expect(normalized.analysis.replyNeeded).toBe("no");
+    expect(normalized.analysis.nextAction).toBe(
+      "Review missed pickup list, confirm affected shipments/customers, and assign follow-up where needed.",
+    );
+    expect(normalized.analysis.nextAction.toLowerCase()).not.toContain("order number");
+    expect(normalized.replyDraft).toBe("");
+    expect(normalized.priorityScore).toBeGreaterThanOrEqual(40);
+    expect(
+      shouldShowInCustomerServiceQueue(buildProcessedEmail(email, normalized)),
+    ).toBe(true);
   });
 
   it("suppresses EQISMART EOD internal reports instead of classifying them as WIMO", () => {
@@ -507,6 +547,39 @@ describe("customerServiceMail", () => {
     expect(
       shouldShowInCustomerServiceQueue(buildProcessedEmail(email, normalized)),
     ).toBe(false);
+  });
+
+  it("keeps real billing issues visible and reply recommended", () => {
+    const email = buildEmail({
+      senderEmail: "billing-contact@example.com",
+      subject: "Invoice charge question",
+      body: "Can you review invoice INV-1001? We were charged twice and need this corrected.",
+      previewText: "Can you review invoice INV-1001?",
+    });
+
+    const normalized = normalizeProcessedEmailResult(
+      email,
+      buildResult({
+        analysis: {
+          ...buildResult().analysis,
+          intent: "billing_question",
+          orderNumber: undefined,
+          risks: ["billing_discrepancy"],
+          summary: "Customer has a billing or invoice question.",
+          nextAction:
+            "Verify invoice, refund, or charge details tied to invoice INV-1001 and reply with the correction or explanation.",
+        },
+      }),
+    );
+
+    expect(normalized.analysis.intent).toBe("billing_question");
+    expect(normalized.analysis.workType).toBe("customer_support");
+    expect(normalized.analysis.actionability).toBe("action_required");
+    expect(normalized.analysis.replyNeeded).toBe("yes");
+    expect(normalized.replyDraft).not.toBe("");
+    expect(
+      shouldShowInCustomerServiceQueue(buildProcessedEmail(email, normalized)),
+    ).toBe(true);
   });
 
   it("keeps automated system notifications out of the customer service queue", () => {

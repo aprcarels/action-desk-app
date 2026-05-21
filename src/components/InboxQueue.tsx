@@ -8,6 +8,7 @@ import type {
   IntentCode,
   PilotQueueView,
   QueueDisplayMode,
+  QueueWorkView,
   WorkflowThread,
 } from "../types/actionDesk";
 
@@ -40,6 +41,8 @@ type InboxQueueProps = {
   pilotQueueView: PilotQueueView;
   queueDisplayMode: QueueDisplayMode;
   queueView: "customer_service" | "all_inbox";
+  queueWorkView: QueueWorkView;
+  queueWorkViewCounts: Record<QueueWorkView, number>;
   showProblemsOnly: boolean;
   isLoadingInbox: boolean;
   isLoadingMore: boolean;
@@ -65,6 +68,7 @@ type InboxQueueProps = {
   onSelectEmail: (emailId: string) => void;
   onPilotQueueViewChange: (value: PilotQueueView) => void;
   onQueueViewChange: (value: "customer_service" | "all_inbox") => void;
+  onQueueWorkViewChange: (value: QueueWorkView) => void;
   onSearchQueryChange: (value: string) => void;
   onUrgencyFilterChange: (value: "all" | "high" | "medium" | "low") => void;
   onIntentFilterChange: (value: IntentCode | "all") => void;
@@ -88,6 +92,25 @@ function getPilotQueueViewLabel(view: PilotQueueView): string {
   }
 }
 
+const QUEUE_WORK_VIEW_OPTIONS: Array<{
+  value: QueueWorkView;
+  label: string;
+}> = [
+  { value: "work_queue", label: "Work Queue" },
+  { value: "needs_reply", label: "Needs Reply" },
+  { value: "review_needed", label: "Review Needed" },
+  { value: "operational_exceptions", label: "Operational Exceptions" },
+  { value: "no_action_suppressed", label: "No Action / Suppressed" },
+  { value: "all_processed", label: "All Processed" },
+];
+
+function getQueueWorkViewLabel(view: QueueWorkView): string {
+  return (
+    QUEUE_WORK_VIEW_OPTIONS.find((option) => option.value === view)?.label ??
+    "Work Queue"
+  );
+}
+
 export function InboxQueue({
   threads,
   groupedRepSections = [],
@@ -102,6 +125,8 @@ export function InboxQueue({
   pilotQueueView,
   queueDisplayMode,
   queueView,
+  queueWorkView,
+  queueWorkViewCounts,
   showProblemsOnly,
   isLoadingInbox,
   isLoadingMore,
@@ -127,6 +152,7 @@ export function InboxQueue({
   onSelectEmail,
   onPilotQueueViewChange,
   onQueueViewChange,
+  onQueueWorkViewChange,
   onSearchQueryChange,
   onUrgencyFilterChange,
   onIntentFilterChange,
@@ -222,6 +248,12 @@ export function InboxQueue({
     gap: "10px",
   };
 
+  const workViewRowStyle: React.CSSProperties = {
+    display: "flex",
+    flexWrap: "wrap",
+    gap: "8px",
+  };
+
   const topIssuesPanelStyle: React.CSSProperties = {
     padding: "14px 20px",
     borderBottom: "1px solid #e5edf5",
@@ -303,7 +335,7 @@ export function InboxQueue({
               {queueView === "customer_service" ? "Queue Quick List" : "Inbox Quick List"}
             </h2>
             <p style={subtitleStyle}>
-              Showing {threads.length} of {totalCount} threads
+              {getQueueWorkViewLabel(queueWorkView)}: showing {threads.length} of {totalCount} threads
               {lastLoadedAt ? ` | Last loaded ${lastLoadedAt}` : ""}
             </p>
           </div>
@@ -386,6 +418,33 @@ export function InboxQueue({
           </div>
         </div>
         <div style={controlsStyle}>
+          <div style={workViewRowStyle} aria-label="Queue work view">
+            {QUEUE_WORK_VIEW_OPTIONS.map((option) => {
+              const selected = queueWorkView === option.value;
+
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={selected ? undefined : () => onQueueWorkViewChange(option.value)}
+                  aria-pressed={selected}
+                  style={{
+                    ...topIssueBadgeStyle,
+                    borderRadius: "10px",
+                    backgroundColor: selected ? "#dbeafe" : "#ffffff",
+                    borderColor: selected ? "#93c5fd" : "#dbe5f0",
+                    color: selected ? "#1d4ed8" : "#334155",
+                    cursor: selected ? "default" : "pointer",
+                  }}
+                >
+                  {option.label}
+                  <span style={{ color: selected ? "#1d4ed8" : "#64748b" }}>
+                    ({queueWorkViewCounts[option.value] ?? 0})
+                  </span>
+                </button>
+              );
+            })}
+          </div>
           <input
             type="text"
             value={searchQuery}
@@ -521,6 +580,16 @@ export function InboxQueue({
         <div style={emptyStateStyle}>
           {pilotMode && !hasActiveFilters && pilotEmptyStateMessage
             ? pilotEmptyStateMessage
+            : queueWorkView === "needs_reply"
+              ? "No reply-recommended emails match the current filters. Review Needed may still have operational work."
+              : queueWorkView === "review_needed"
+                ? "No review-needed emails match the current filters."
+                : queueWorkView === "operational_exceptions"
+                  ? "No operational exceptions match the current filters."
+                  : queueWorkView === "no_action_suppressed"
+                    ? "No no-action or suppressed emails match the current filters."
+                    : queueWorkView === "all_processed"
+                      ? "No processed emails match the current filters."
             : pilotMode && pilotQueueView !== "active"
               ? `No ${getPilotQueueViewLabel(pilotQueueView).toLowerCase()} emails match the current filters.`
               : queueView === "customer_service"

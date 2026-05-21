@@ -130,10 +130,29 @@ describe("generateRecommendedAction", () => {
     );
 
     expect(action).toBe(
-      "Review scheduled pickup details and confirm whether the date/time works. Reply only if alternate scheduling or pickup details are needed.",
+      "Review pickup/scheduling details. Reply only if schedule conflict or missing pickup details.",
     );
     expect(action.toLowerCase()).not.toContain("invoice");
     expect(action.toLowerCase()).not.toContain("order number");
+  });
+
+  it("uses review guidance for missed pickup reports without generic reply instructions", () => {
+    const action = generateRecommendedAction(
+      buildInput({
+        intent: "missed_pickups_report",
+        actionability: "review_needed",
+        replyNeeded: "no",
+        orderNumber: undefined,
+        risks: [],
+        workType: "customer_support",
+      }),
+    );
+
+    expect(action).toBe(
+      "Review missed pickup list, confirm affected shipments/customers, and assign follow-up where needed.",
+    );
+    expect(action.toLowerCase()).not.toContain("order number");
+    expect(action.toLowerCase()).not.toContain("invoice");
   });
 
   it("falls back to a concise operational next step for uncertain high-urgency work", () => {

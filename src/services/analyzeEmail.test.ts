@@ -14,6 +14,22 @@ describe("analyzeEmail", () => {
     expect(analysis.replyNeeded).toBe("no");
   });
 
+  it("classifies missed pickup reports as review-needed operational work without a reply draft", () => {
+    const analysis = analyzeEmail(
+      buildAnalysisInput({
+        subject: "MISSED PICKUPS 5/20/2026",
+        body: "Attached are the missed pickups for tonight.",
+      }),
+    );
+
+    expect(analysis.intent).toBe("missed_pickups_report");
+    expect(analysis.actionability).toBe("review_needed");
+    expect(analysis.replyNeeded).toBe("no");
+    expect(analysis.nextAction).toBe(
+      "Review missed pickup list, confirm affected shipments/customers, and assign follow-up where needed.",
+    );
+  });
+
   it("downgrades FYI messages to low urgency", () => {
     const analysis = analyzeEmail(
       "FYI - just letting you know the carrier posted a delay. No action needed right now.",
@@ -126,7 +142,7 @@ describe("analyzeEmail", () => {
     expect(analysis.risks).not.toContain("billing_discrepancy");
     expect(analysis.risks).not.toContain("customer_frustration");
     expect(analysis.nextAction).toBe(
-      "Review scheduled pickup details and confirm whether the date/time works. Reply only if alternate scheduling or pickup details are needed.",
+      "Review pickup/scheduling details. Reply only if schedule conflict or missing pickup details.",
     );
     expect(analysis.nextAction.toLowerCase()).not.toContain("order number");
     expect(analysis.nextAction.toLowerCase()).not.toContain("invoice");

@@ -45,6 +45,10 @@ function isOperationalLogisticsIntent(intent: EmailAnalysis["intent"]): boolean 
   );
 }
 
+function isOperationalExceptionIntent(intent: EmailAnalysis["intent"]): boolean {
+  return intent === "missed_pickups_report" || intent === "operational_exception";
+}
+
 export function generateRecommendedAction({
   intent,
   urgency,
@@ -95,6 +99,10 @@ export function generateRecommendedAction({
     return "No customer-service action needed. Mark not relevant unless an internal owner intentionally wants to review the vendor or sales outreach.";
   }
 
+  if (isOperationalExceptionIntent(intent)) {
+    return "Review missed pickup list, confirm affected shipments/customers, and assign follow-up where needed.";
+  }
+
   if (workType === "internal") {
     return "Internal or awareness-only message. Keep it visible for review only and avoid sending a customer-service reply.";
   }
@@ -104,7 +112,7 @@ export function generateRecommendedAction({
   }
 
   if (isOperationalLogisticsIntent(intent)) {
-    return "Review scheduled pickup details and confirm whether the date/time works. Reply only if alternate scheduling or pickup details are needed.";
+    return "Review pickup/scheduling details. Reply only if schedule conflict or missing pickup details.";
   }
 
   if (replyNeeded === "no" || actionability === "no_action_needed") {

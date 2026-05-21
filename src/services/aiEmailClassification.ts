@@ -11,6 +11,8 @@ const AI_CLASSIFICATION_CATEGORIES = [
   "order/shipment issue",
   "billing/refund",
   "operational logistics scheduling",
+  "missed pickups report",
+  "operational exception",
   "routing coordination",
   "carrier pickup scheduling",
   "vendor sales outreach",
@@ -94,11 +96,19 @@ export function normalizeAiEmailClassification(
     return null;
   }
 
+  const taskSuggestion =
+    typeof value.taskSuggestion === "string" && value.taskSuggestion.trim().length > 0
+      ? value.taskSuggestion.trim()
+      : typeof value.recommendedTask === "string" && value.recommendedTask.trim().length > 0
+        ? value.recommendedTask.trim()
+        : undefined;
+
   return {
     category,
     actionable: value.actionable,
     urgency: value.urgency,
     summary: value.summary.trim(),
+    taskSuggestion,
     confidence: value.confidence,
     aiSource: "ollama",
   };

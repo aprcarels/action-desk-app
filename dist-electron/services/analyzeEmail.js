@@ -90,6 +90,8 @@ function getIntent(normalizedLatestMessage, normalizedEmail) {
     const isInternalOperations = (0, emailWorkHeuristics_1.isInternalOperationsThread)(normalizedLatestMessage) ||
         (0, emailWorkHeuristics_1.isInternalOperationsThread)(normalizedEmail);
     const hasOperationalLogisticsScheduling = (0, emailWorkHeuristics_1.hasOperationalLogisticsSchedulingSignals)(normalizedLatestMessage);
+    const hasMissedPickupReport = (0, emailWorkHeuristics_1.hasMissedPickupSignals)(normalizedLatestMessage);
+    const hasOperationalException = (0, emailWorkHeuristics_1.hasOperationalExceptionSignals)(normalizedLatestMessage);
     const asksForPod = normalizedLatestMessage.includes("proof of delivery") ||
         normalizedLatestMessage.includes("pod") ||
         normalizedLatestMessage.includes("delivery receipt");
@@ -135,6 +137,12 @@ function getIntent(normalizedLatestMessage, normalizedEmail) {
     if (isInternalOperations) {
         return "general_support";
     }
+    if (hasMissedPickupReport) {
+        return "missed_pickups_report";
+    }
+    if (hasOperationalException) {
+        return "operational_exception";
+    }
     if (hasOperationalLogisticsScheduling) {
         return "operational_logistics_scheduling";
     }
@@ -175,6 +183,7 @@ function getUrgency(normalizedLatestMessage, normalizedEmail) {
     const logisticsContext = (0, emailWorkHeuristics_1.hasLogisticsCoordinationSignals)(normalizedLatestMessage);
     const operationalTimingSignal = (0, emailWorkHeuristics_1.hasOperationalTimingSignal)(normalizedLatestMessage);
     const hasOperationalLogisticsScheduling = (0, emailWorkHeuristics_1.hasOperationalLogisticsSchedulingSignals)(normalizedLatestMessage);
+    const hasOperationalException = (0, emailWorkHeuristics_1.hasOperationalExceptionSignals)(normalizedLatestMessage);
     if ((0, emailWorkHeuristics_1.isInternalOperationsThread)(normalizedLatestMessage) ||
         (0, emailWorkHeuristics_1.isInternalOperationsThread)(normalizedEmail)) {
         return "low";
@@ -192,6 +201,13 @@ function getUrgency(normalizedLatestMessage, normalizedEmail) {
     if (hasOperationalLogisticsScheduling) {
         return (0, emailWorkHeuristics_1.hasOperationalLogisticsFailureOrEscalationSignals)(normalizedLatestMessage) ||
             ((0, emailWorkHeuristics_1.hasOperationalLogisticsScheduleConflict)(normalizedLatestMessage) && latestUrgencySignal === "high")
+            ? "high"
+            : "medium";
+    }
+    if (hasOperationalException) {
+        return latestUrgencySignal === "high" ||
+            normalizedLatestMessage.includes("today") ||
+            normalizedLatestMessage.includes("tonight")
             ? "high"
             : "medium";
     }
@@ -329,6 +345,12 @@ function getSummary(intent, urgency, normalizedLatestMessage, analysis) {
         return (0, emailWorkHeuristics_1.hasOperationalLogisticsScheduleConflict)(normalizedLatestMessage)
             ? "Operational logistics scheduling email needs alternate pickup or routing coordination."
             : "Operational logistics scheduling email provides pickup/routing details and asks AP Express to reply only if the date/time does not work.";
+    }
+    if (intent === "missed_pickups_report") {
+        return "Missed pickup report needs operational review and follow-up assignment for affected shipments or customers.";
+    }
+    if (intent === "operational_exception") {
+        return "Operational exception needs review to confirm impacted shipments, customers, or follow-up owners.";
     }
     if (intent === "where_is_my_order") {
         if (hasDeadlineRequest) {

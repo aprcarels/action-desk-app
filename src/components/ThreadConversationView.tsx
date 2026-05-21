@@ -14,6 +14,10 @@ import {
   getAnalysisSourceDisclosure,
   getDraftSourceDisclosure,
 } from "../services/sourceDisclosure";
+import {
+  getAssistiveAiTaskSuggestion,
+  getReviewTaskLabels,
+} from "../services/taskReviewLabels";
 import type { ProcessedEmail, WorkflowThread } from "../types/actionDesk";
 
 type ThreadConversationViewProps = {
@@ -110,6 +114,8 @@ export function ThreadConversationView({
     result.replyDraftSource ?? result.analysisSource,
   );
   const aiClassification = result.aiClassification;
+  const aiTaskSuggestion = getAssistiveAiTaskSuggestion(aiClassification);
+  const reviewTaskLabels = getReviewTaskLabels(result.analysis);
   const olderMessages = thread.items.filter((threadItem) => threadItem.email.id !== item.email.id);
   const replyDraftUnavailable =
     !hasReplyDraft &&
@@ -226,6 +232,11 @@ export function ThreadConversationView({
               <p style={{ ...bodyTextStyle, marginTop: "6px" }}>
                 {aiClassification.summary}
               </p>
+              {aiTaskSuggestion && (
+                <p style={{ ...bodyTextStyle, marginTop: "6px", fontWeight: 700 }}>
+                  AI task suggestion: {aiTaskSuggestion}
+                </p>
+              )}
               <p style={assistiveAiFootnoteStyle}>
                 Assistive only. Action Desk rules remain authoritative.
               </p>
@@ -241,6 +252,15 @@ export function ThreadConversationView({
               {result.analysis.nextAction ||
                 "Review the message and determine the next support step."}
             </p>
+            {reviewTaskLabels.length > 0 && (
+              <div style={taskLabelRowStyle}>
+                {reviewTaskLabels.map((label) => (
+                  <span key={label} style={taskLabelStyle}>
+                    {label}
+                  </span>
+                ))}
+              </div>
+            )}
           </div>
 
           <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
@@ -625,6 +645,22 @@ const recommendationPillStyle: React.CSSProperties = {
   backgroundColor: "#2563eb",
   borderRadius: "999px",
   padding: "4px 8px",
+};
+
+const taskLabelRowStyle: React.CSSProperties = {
+  display: "flex",
+  gap: "8px",
+  flexWrap: "wrap",
+  marginTop: "10px",
+};
+
+const taskLabelStyle: React.CSSProperties = {
+  fontSize: "12px",
+  fontWeight: 700,
+  color: "#166534",
+  backgroundColor: "#dcfce7",
+  borderRadius: "999px",
+  padding: "5px 9px",
 };
 
 const systemEventCardStyle: React.CSSProperties = {

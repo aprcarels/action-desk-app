@@ -211,4 +211,67 @@ describe("getEffectiveAssignment", () => {
       primaryRepId: "rep-1",
     });
   });
+
+  it("ignores persisted auto assignment for suppressed vendor no-action work", () => {
+    const item = buildProcessedEmail({
+      customerMatch: {
+        customerId: "customer-1",
+        customerName: "Acme",
+        matchedOn: "body",
+        matchedValue: "Acme",
+        ownerRepId: "rep-1",
+      },
+      result: {
+        ...buildProcessedEmail().result!,
+        analysis: {
+          ...buildProcessedEmail().result!.analysis,
+          intent: "general_support",
+          urgency: "low",
+          risks: [],
+          actionability: "no_action_needed",
+          replyNeeded: "no",
+          workType: "vendor",
+          messageType: "internal_alert",
+          nextAction:
+            "No customer-service action needed. Mark not relevant unless an internal owner intentionally wants to review the vendor outreach.",
+        },
+        replyDraft: "",
+        priorityScore: 0,
+      },
+    });
+    const customers: SavedCustomer[] = [
+      {
+        id: "customer-1",
+        name: "Acme",
+        emails: ["orders@acme.com"],
+        domains: ["acme.com"],
+        ownerRepId: "rep-1",
+      },
+    ];
+    const threadState: ThreadWorkflowState = {
+      autoAssignment: {
+        type: "auto",
+        assignedRepId: "rep-1",
+        assignedRepName: "Mia Johnson",
+        assignedAt: "2026-04-21T12:00:00.000Z",
+      },
+      assignmentHistory: [],
+      notes: [],
+      replyLog: [],
+    };
+
+    expect(
+      resolveCanonicalAssignment({
+        threadState,
+        representativeItem: item,
+        customers,
+        reps,
+      }),
+    ).toMatchObject({
+      assignmentStatus: "unassigned",
+      assignmentSource: "none",
+      customerId: "customer-1",
+      matchType: "body",
+    });
+  });
 });

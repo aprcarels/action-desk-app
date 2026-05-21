@@ -16,8 +16,10 @@ import { createBaseWorkflowThreads, getSenderThreadGroupKey } from "./threadGrou
 import { canAccessLocation, normalizeLocationId } from "./locations";
 import { getCustomerPrimaryOwnerId, getEmailDomain } from "./customerSettings";
 import { applyCustomerPriorityToEmails } from "./customerMatching";
+import { shouldShowInCustomerServiceQueue } from "./customerServiceMail";
 import type {
   AssignmentResolution,
+  EmailAnalysis,
   ProcessedEmail,
   QueueScopeView,
   RepProfile,
@@ -46,6 +48,35 @@ export type WorkflowMetrics = {
   atRisk: number;
   resolvedToday: number;
   snoozed: number;
+};
+
+export type WorkflowProcessingMetrics = {
+  totalLoaded: number;
+  totalProcessed: number;
+  visibleQueueItems: number;
+  hiddenByPilotState: number;
+  hiddenByStatusFilter: number;
+  hiddenAsVendorSpamNoise: number;
+  hiddenAsNoAction: number;
+  replyRecommended: number;
+  reviewNeeded: number;
+  noActionNeeded: number;
+  vendorSuppressed: number;
+  internalOperational: number;
+  operationalLogistics: number;
+  operationalExceptions: number;
+  reviewNeededOperationalItems: number;
+  unassignedItems: number;
+  assignedReviewNeededItems: number;
+};
+
+export type WorkflowProcessingMetricOptions = {
+  totalLoaded?: number;
+  visibleQueueItems?: number;
+  hiddenByPilotState?: number;
+  hiddenByStatusFilter?: number;
+  unassignedItems?: number;
+  assignedReviewNeededItems?: number;
 };
 
 export type RepWorkloadSummary = {
@@ -652,6 +683,90 @@ export function getVisibleWorkflowThreads(
   showSnoozed: boolean,
 ): WorkflowThread[] {
   return showSnoozed ? threads : threads.filter((thread) => !thread.isSnoozed);
+}
+
+function isOperationalLogisticsIntent(
+  intent?: EmailAnalysis["intent"],
+): boolean {
+  return (
+    intent === "operational_logistics_scheduling" ||
+    intent === "routing_coordination" ||
+    intent === "carrier_pickup_scheduling"
+  );
+}
+
+function isOperationalExceptionIntent(
+  intent?: EmailAnalysis["intent"],
+): boolean {
+  return intent === "missed_pickups_report" || intent === "operational_exception";
+}
+
+function isOperationalReviewIntent(
+  intent?: EmailAnalysis["intent"],
+): boolean {
+  return isOperationalLogisticsIntent(intent) || isOperationalExceptionIntent(intent);
+}
+
+export function calculateWorkflowProcessingMetrics(
+  items: ProcessedEmail[],
+  options: WorkflowProcessingMetricOptions = {},
+): WorkflowProcessingMetrics {
+  const processedItems = items.filter(
+    (item) => item.status === "processed" && Boolean(item.result),
+  );
+  const hiddenAsVendorSpamNoise = processedItems.filter(
+    (item) =>
+      (item.result?.analysis.workType === "vendor" ||
+        item.result?.analysis.workType === "suspicious" ||
+        item.result?.analysis.workType === "system") &&
+      !shouldShowInCustomerServiceQueue(item),
+  ).length;
+  const hiddenAsNoAction = processedItems.filter(
+    (item) =>
+      item.result?.analysis.actionability === "no_action_needed" &&
+      !shouldShowInCustomerServiceQueue(item),
+  ).length;
+
+  return {
+    totalLoaded: options.totalLoaded ?? items.length,
+    totalProcessed: processedItems.length,
+    visibleQueueItems: options.visibleQueueItems ?? items.length,
+    hiddenByPilotState: options.hiddenByPilotState ?? 0,
+    hiddenByStatusFilter: options.hiddenByStatusFilter ?? 0,
+    hiddenAsVendorSpamNoise,
+    hiddenAsNoAction,
+    replyRecommended: processedItems.filter((item) =>
+      item.result?.analysis.replyNeeded === "yes" ||
+      item.result?.analysis.replyNeeded === "recommended",
+    ).length,
+    reviewNeeded: processedItems.filter(
+      (item) => item.result?.analysis.actionability === "review_needed",
+    ).length,
+    noActionNeeded: processedItems.filter(
+      (item) => item.result?.analysis.actionability === "no_action_needed",
+    ).length,
+    vendorSuppressed: processedItems.filter(
+      (item) =>
+        item.result?.analysis.workType === "vendor" &&
+        !shouldShowInCustomerServiceQueue(item),
+    ).length,
+    internalOperational: processedItems.filter(
+      (item) => item.result?.analysis.workType === "internal",
+    ).length,
+    operationalLogistics: processedItems.filter((item) =>
+      isOperationalLogisticsIntent(item.result?.analysis.intent),
+    ).length,
+    operationalExceptions: processedItems.filter((item) =>
+      isOperationalExceptionIntent(item.result?.analysis.intent),
+    ).length,
+    reviewNeededOperationalItems: processedItems.filter(
+      (item) =>
+        item.result?.analysis.actionability === "review_needed" &&
+        isOperationalReviewIntent(item.result?.analysis.intent),
+    ).length,
+    unassignedItems: options.unassignedItems ?? 0,
+    assignedReviewNeededItems: options.assignedReviewNeededItems ?? 0,
+  };
 }
 
 export function groupWorkflowThreadsByAssignedRep(options: {

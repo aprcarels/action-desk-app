@@ -290,6 +290,34 @@ const OPERATIONAL_LOGISTICS_SCHEDULING_PHRASES = [
   "otif",
 ];
 
+const MISSED_PICKUP_PATTERNS = [
+  "missed pickups",
+  "missed pickup",
+  "pickup missed",
+  "pickup was missed",
+  "pickup has been missed",
+  "driver did not check in",
+  "driver didn't check in",
+  "pickup not completed",
+  "not picked up",
+  "failed pickup",
+  "attached are the missed pickups",
+];
+
+const OPERATIONAL_EXCEPTION_PATTERNS = [
+  ...MISSED_PICKUP_PATTERNS,
+  "shipment exception",
+  "shipment exceptions",
+  "pickup exception",
+  "pickup exceptions",
+  "scheduling issue",
+  "routing issue",
+  "carrier exception",
+  "carrier exceptions",
+  "pickup issue",
+  "pickup issues",
+];
+
 const OPERATIONAL_LOGISTICS_SCHEDULING_REGEXES = [
   /\bmpu\b/,
   /\bcdd\b/,
@@ -600,6 +628,15 @@ export function hasCustomerFollowUpRequest(text: string): boolean {
 
   const hasQuestion = normalized.includes("?");
   const hasFollowUpLanguage = includesAny(normalized, CUSTOMER_FOLLOW_UP_PATTERNS);
+  const hasDirectCustomerQuestion =
+  normalized.includes("is the team working on this order") ||
+  normalized.includes("any chance we receive") ||
+  normalized.includes("please provide") ||
+  normalized.includes("kindly provide") ||
+  normalized.includes("can you provide") ||
+  normalized.includes("can we receive") ||
+  normalized.includes("pallet details") ||
+  normalized.includes("pallet detail");
   const hasOperationalLanguage =
     hasLogisticsCoordinationSignals(normalized) ||
     isInternalOperationsThread(normalized) ||
@@ -607,7 +644,11 @@ export function hasCustomerFollowUpRequest(text: string): boolean {
     normalized.includes("pick ticket") ||
     normalized.includes("ship date");
 
-  return (hasQuestion && hasOperationalLanguage) || hasFollowUpLanguage;
+  return (
+  (hasQuestion && hasOperationalLanguage) ||
+  hasFollowUpLanguage ||
+  hasDirectCustomerQuestion
+);
 }
 
 export function extractLatestMessageText(email: string): string {
@@ -736,7 +777,34 @@ export function hasOperationalLogisticsFailureOrEscalationSignals(text: string):
     return false;
   }
 
-  return includesAny(normalized, LOGISTICS_FAILURE_ESCALATION_PATTERNS);
+  return includesAny(normalized, LOGISTICS_FAILURE_ESCALATION_PATTERNS) ||
+    hasOperationalExceptionSignals(normalized);
+}
+
+export function hasMissedPickupSignals(text: string): boolean {
+  const normalized = normalizeWhitespace(text).toLowerCase();
+
+  if (!normalized) {
+    return false;
+  }
+
+  return includesAny(normalized, MISSED_PICKUP_PATTERNS);
+}
+
+export function hasOperationalExceptionSignals(text: string): boolean {
+  const normalized = normalizeWhitespace(text).toLowerCase();
+
+  if (!normalized) {
+    return false;
+  }
+
+  const hasTodayPickupException =
+    /\b(?:today|tonight)\b/.test(normalized) &&
+    /\b(?:pickup|pickups|picked up|carrier|driver)\b/.test(normalized) &&
+    /\b(?:exception|exceptions|missed|failed|not completed|did not|didn't)\b/.test(normalized);
+
+  return includesAny(normalized, OPERATIONAL_EXCEPTION_PATTERNS) ||
+    hasTodayPickupException;
 }
 
 export function hasActualBillingQuestion(text: string): boolean {

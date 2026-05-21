@@ -16,6 +16,9 @@ function isOperationalLogisticsIntent(intent) {
         intent === "routing_coordination" ||
         intent === "carrier_pickup_scheduling");
 }
+function isOperationalExceptionIntent(intent) {
+    return intent === "missed_pickups_report" || intent === "operational_exception";
+}
 function generateRecommendedAction({ intent, urgency, risks, orderNumber, caseIdentifiers, hasDeadlineRequest, deadlineState, messageType, actionability, replyNeeded, workType, hasConfirmationRequest, hasLogisticsContext, hasOperationalTimingSignal, orderContext, }) {
     const orderLabel = getOrderLabel(orderNumber);
     const hasIdentifiers = (0, caseIdentifiers_1.hasCaseIdentifiers)({
@@ -46,6 +49,9 @@ function generateRecommendedAction({ intent, urgency, risks, orderNumber, caseId
     if (workType === "vendor") {
         return "No customer-service action needed. Mark not relevant unless an internal owner intentionally wants to review the vendor or sales outreach.";
     }
+    if (isOperationalExceptionIntent(intent)) {
+        return "Review missed pickup list, confirm affected shipments/customers, and assign follow-up where needed.";
+    }
     if (workType === "internal") {
         return "Internal or awareness-only message. Keep it visible for review only and avoid sending a customer-service reply.";
     }
@@ -53,7 +59,7 @@ function generateRecommendedAction({ intent, urgency, risks, orderNumber, caseId
         return "This message is not clearly a customer-service case. Review first and confirm ownership before replying.";
     }
     if (isOperationalLogisticsIntent(intent)) {
-        return "Review scheduled pickup details and confirm whether the date/time works. Reply only if alternate scheduling or pickup details are needed.";
+        return "Review pickup/scheduling details. Reply only if schedule conflict or missing pickup details.";
     }
     if (replyNeeded === "no" || actionability === "no_action_needed") {
         return "No direct reply is recommended right now. Keep this for awareness and verify in WMS only if follow-up becomes necessary.";

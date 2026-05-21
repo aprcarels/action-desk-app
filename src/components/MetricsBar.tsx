@@ -1,4 +1,5 @@
 import { formatElapsedTime } from "../services/sla";
+import type { WorkflowProcessingMetrics } from "../services/workflowSelectors";
 
 type MetricsBarProps = {
   totalOpen: number;
@@ -9,6 +10,7 @@ type MetricsBarProps = {
   atRisk: number;
   resolvedToday: number;
   snoozed: number;
+  processingMetrics?: WorkflowProcessingMetrics;
   showSnoozed?: boolean;
 };
 
@@ -28,6 +30,7 @@ export function MetricsBar({
   atRisk,
   resolvedToday,
   snoozed,
+  processingMetrics,
   showSnoozed,
 }: MetricsBarProps) {
   const metrics = [
@@ -48,6 +51,90 @@ export function MetricsBar({
     { label: "Resolved Today", value: resolvedToday, color: "#166534" },
     ...(showSnoozed
       ? [{ label: "Snoozed", value: snoozed, color: "#475569" }]
+      : []),
+    ...(processingMetrics
+      ? [
+          {
+            label: "Loaded Emails",
+            value: processingMetrics.totalLoaded,
+            color: "#0f172a",
+          },
+          {
+            label: "Processed Emails",
+            value: processingMetrics.totalProcessed,
+            color: "#0f172a",
+          },
+          {
+            label: "Visible Queue Items",
+            value: processingMetrics.visibleQueueItems,
+            color: "#1d4ed8",
+          },
+          {
+            label: "Hidden Pilot",
+            value: processingMetrics.hiddenByPilotState,
+            color: "#64748b",
+          },
+          {
+            label: "Hidden Status",
+            value: processingMetrics.hiddenByStatusFilter,
+            color: "#64748b",
+          },
+          {
+            label: "Hidden Noise",
+            value: processingMetrics.hiddenAsVendorSpamNoise,
+            color: "#92400e",
+          },
+          {
+            label: "Hidden No Action",
+            value: processingMetrics.hiddenAsNoAction,
+            color: "#64748b",
+          },
+          {
+            label: "Reply Recommended",
+            value: processingMetrics.replyRecommended,
+            color: "#166534",
+          },
+          {
+            label: "Review Needed",
+            value: processingMetrics.reviewNeeded,
+            color: "#1d4ed8",
+          },
+          {
+            label: "No Action",
+            value: processingMetrics.noActionNeeded,
+            color: "#64748b",
+          },
+          {
+            label: "Vendor Suppressed",
+            value: processingMetrics.vendorSuppressed,
+            color: "#92400e",
+          },
+          {
+            label: "Internal Ops",
+            value: processingMetrics.internalOperational,
+            color: "#475569",
+          },
+          {
+            label: "Operational Logistics",
+            value: processingMetrics.operationalLogistics,
+            color: "#0f766e",
+          },
+          {
+            label: "Operational Exceptions",
+            value: processingMetrics.operationalExceptions,
+            color: "#0f766e",
+          },
+          {
+            label: "Operational Reviews",
+            value: processingMetrics.reviewNeededOperationalItems,
+            color: "#0f766e",
+          },
+          {
+            label: "Assigned Reviews",
+            value: processingMetrics.assignedReviewNeededItems,
+            color: "#166534",
+          },
+        ]
       : []),
   ];
 

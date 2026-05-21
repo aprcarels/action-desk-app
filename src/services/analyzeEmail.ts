@@ -16,6 +16,8 @@ import {
   hasOperationalLogisticsFailureOrEscalationSignals,
   hasOperationalLogisticsScheduleConflict,
   hasOperationalLogisticsSchedulingSignals,
+  hasMissedPickupSignals,
+  hasOperationalExceptionSignals,
   hasOperationalTimingSignal,
   hasShippingDeadlineRequest,
   isInternalOperationsThread,
@@ -119,6 +121,8 @@ function getIntent(normalizedLatestMessage: string, normalizedEmail: string): In
     isInternalOperationsThread(normalizedEmail);
   const hasOperationalLogisticsScheduling =
     hasOperationalLogisticsSchedulingSignals(normalizedLatestMessage);
+  const hasMissedPickupReport = hasMissedPickupSignals(normalizedLatestMessage);
+  const hasOperationalException = hasOperationalExceptionSignals(normalizedLatestMessage);
   const asksForPod =
     normalizedLatestMessage.includes("proof of delivery") ||
     normalizedLatestMessage.includes("pod") ||
@@ -172,6 +176,14 @@ function getIntent(normalizedLatestMessage: string, normalizedEmail: string): In
 
   if (isInternalOperations) {
     return "general_support";
+  }
+
+  if (hasMissedPickupReport) {
+    return "missed_pickups_report";
+  }
+
+  if (hasOperationalException) {
+    return "operational_exception";
   }
 
   if (hasOperationalLogisticsScheduling) {
@@ -231,6 +243,8 @@ function getUrgency(
   const operationalTimingSignal = hasOperationalTimingSignal(normalizedLatestMessage);
   const hasOperationalLogisticsScheduling =
     hasOperationalLogisticsSchedulingSignals(normalizedLatestMessage);
+  const hasOperationalException =
+    hasOperationalExceptionSignals(normalizedLatestMessage);
 
   if (
     isInternalOperationsThread(normalizedLatestMessage) ||
@@ -257,6 +271,14 @@ function getUrgency(
   if (hasOperationalLogisticsScheduling) {
     return hasOperationalLogisticsFailureOrEscalationSignals(normalizedLatestMessage) ||
       (hasOperationalLogisticsScheduleConflict(normalizedLatestMessage) && latestUrgencySignal === "high")
+      ? "high"
+      : "medium";
+  }
+
+  if (hasOperationalException) {
+    return latestUrgencySignal === "high" ||
+      normalizedLatestMessage.includes("today") ||
+      normalizedLatestMessage.includes("tonight")
       ? "high"
       : "medium";
   }
@@ -452,6 +474,14 @@ function getSummary(
     return hasOperationalLogisticsScheduleConflict(normalizedLatestMessage)
       ? "Operational logistics scheduling email needs alternate pickup or routing coordination."
       : "Operational logistics scheduling email provides pickup/routing details and asks AP Express to reply only if the date/time does not work.";
+  }
+
+  if (intent === "missed_pickups_report") {
+    return "Missed pickup report needs operational review and follow-up assignment for affected shipments or customers.";
+  }
+
+  if (intent === "operational_exception") {
+    return "Operational exception needs review to confirm impacted shipments, customers, or follow-up owners.";
   }
 
   if (intent === "where_is_my_order") {

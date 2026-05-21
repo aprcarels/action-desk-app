@@ -4,6 +4,8 @@ import {
   getDeadlineState,
   hasActualBillingQuestion,
   hasClearRequest,
+  hasMissedPickupSignals,
+  hasOperationalExceptionSignals,
   hasOperationalLogisticsFailureOrEscalationSignals,
   hasOperationalLogisticsScheduleConflict,
   hasOperationalLogisticsSchedulingSignals,
@@ -229,6 +231,17 @@ function isOperationalLogisticsIntent(intent: EmailAnalysis["intent"]): boolean 
   );
 }
 
+function isOperationalExceptionIntent(intent?: EmailAnalysis["intent"]): boolean {
+  return intent === "missed_pickups_report" || intent === "operational_exception";
+}
+
+function isOperationalReviewIntent(intent?: EmailAnalysis["intent"]): boolean {
+  return (
+    isOperationalLogisticsIntent(intent ?? "general_support") ||
+    isOperationalExceptionIntent(intent)
+  );
+}
+
 export function isLowValueSystemReportEmail(email: Pick<
   EmailItem,
   "senderEmail" | "subject" | "previewText" | "body"
@@ -284,7 +297,19 @@ function hasDirectCustomerSignals(text: string, analysis?: EmailAnalysis): boole
     includesAny(text, ACTIONABLE_CUSTOMER_PATTERNS) ||
     hasOrderIdentifier(text, analysis, { allowAnalysisIdentifiers: false }) ||
     Boolean(analysis?.hasDeadlineRequest) ||
-    Boolean(analysis?.hasConfirmationRequest && analysis?.hasLogisticsContext)
+    Boolean(analysis?.hasConfirmationRequest && analysis?.hasLogisticsContext) ||
+    hasOperationalReviewSignals(text, analysis)
+  );
+}
+
+function hasOperationalReviewSignals(
+  text: string,
+  analysis?: EmailAnalysis,
+): boolean {
+  return (
+    isOperationalReviewIntent(analysis?.intent) ||
+    hasMissedPickupSignals(text) ||
+    hasOperationalExceptionSignals(text)
   );
 }
 
@@ -307,7 +332,8 @@ function hasCustomerTopicSignals(text: string, analysis?: EmailAnalysis): boolea
     Boolean(analysis?.hasDeadlineRequest) ||
     Boolean(analysis?.hasConfirmationRequest && analysis?.hasLogisticsContext) ||
     Boolean(analysis && analysis.intent !== "general_support") ||
-    Boolean(analysis && analysis.risks.length > 0)
+    Boolean(analysis && analysis.risks.length > 0) ||
+    hasOperationalReviewSignals(text, analysis)
   );
 }
 
@@ -373,6 +399,9 @@ export function classifyWorkType(
   const vendorSalesOutreach =
     isVendorSalesOutreach(normalizedLatestMessage) ||
     isVendorSalesOutreach(normalizedText);
+  const operationalReviewSignals =
+    hasOperationalReviewSignals(normalizedLatestMessage, analysis) ||
+    hasOperationalReviewSignals(normalizedText, analysis);
 
   const vendor =
     (vendorSalesOutreach || includesAny(normalizedLatestMessage, VENDOR_PATTERNS)) &&
@@ -392,6 +421,10 @@ export function classifyWorkType(
 
   if (vendorSalesOutreach) {
     return "vendor";
+  }
+
+  if (operationalReviewSignals) {
+    return "customer_support";
   }
 
   if (internalOperationalReport && !hasClearRequest(normalizedLatestMessage)) {
@@ -490,6 +523,21 @@ export function normalizeProcessedEmailResult(
   const operationalLogisticsText = [normalizedLatestMessage, normalizeEmailText(email)]
     .filter(Boolean)
     .join("\n");
+  const missedPickupReport = hasMissedPickupSignals(operationalLogisticsText);
+  const explicitNoActionOperationalNotice =
+    operationalLogisticsText.includes("no action needed") ||
+    operationalLogisticsText.includes("no action required");
+  const rawOperationalExceptionReview =
+    missedPickupReport ||
+    hasOperationalExceptionSignals(operationalLogisticsText) ||
+    isOperationalExceptionIntent(derivedAnalysis.intent);
+  const operationalExceptionReview =
+    rawOperationalExceptionReview &&
+    !(
+      explicitNoActionOperationalNotice &&
+      !missedPickupReport &&
+      includesAny(operationalLogisticsText, SYSTEM_PATTERNS)
+    );
   const operationalLogisticsScheduling =
     hasOperationalLogisticsSchedulingSignals(operationalLogisticsText) ||
     isOperationalLogisticsIntent(derivedAnalysis.intent);
@@ -499,7 +547,35 @@ export function normalizeProcessedEmailResult(
     hasOperationalLogisticsFailureOrEscalationSignals(operationalLogisticsText);
   const operationalLogisticsRequiresReply =
     operationalLogisticsConflict || operationalLogisticsFailureOrEscalation;
-  const analysisForWorkType: EmailAnalysis = operationalLogisticsScheduling
+  const analysisForWorkType: EmailAnalysis = operationalExceptionReview
+    ? {
+        ...derivedAnalysis,
+        intent: missedPickupReport ? "missed_pickups_report" : "operational_exception",
+        summary: missedPickupReport
+          ? "Missed pickup report needs operational review and follow-up assignment for affected shipments or customers."
+          : "Operational exception needs review to confirm impacted shipments, customers, or follow-up owners.",
+        urgency:
+          normalizedLatestMessage.includes("today") ||
+          normalizedLatestMessage.includes("tonight") ||
+          operationalLogisticsFailureOrEscalation
+            ? "high"
+            : "medium",
+        risks: hasActualBillingQuestion(operationalLogisticsText)
+          ? derivedAnalysis.risks
+          : derivedAnalysis.risks.filter((risk) => (
+              risk !== "billing_discrepancy" &&
+              risk !== "customer_frustration"
+            )),
+        actionability: "review_needed",
+        replyNeeded: "no",
+        messageType: isInternalSender((email.senderEmail || "").toLowerCase())
+          ? "internal_alert"
+          : "customer_request",
+        hasClearRequest: false,
+        hasLogisticsContext: true,
+        hasOperationalTimingSignal: true,
+      }
+    : operationalLogisticsScheduling
     ? {
         ...derivedAnalysis,
         intent: isOperationalLogisticsIntent(derivedAnalysis.intent)
@@ -601,6 +677,9 @@ export function shouldShowInCustomerServiceQueue(item: ProcessedEmail): boolean 
   const internalOperationalReport =
     isInternalOperationalReport(latestMessageText) ||
     isInternalOperationalReport(fullText);
+  const operationalReviewSignals =
+    hasOperationalReviewSignals(latestMessageText, analysis) ||
+    hasOperationalReviewSignals(fullText, analysis);
   const isContinuationWithoutAsk =
     analysis.isThreadContinuation === true &&
     !analysis.hasClearRequest &&
@@ -612,9 +691,19 @@ export function shouldShowInCustomerServiceQueue(item: ProcessedEmail): boolean 
 
   if (
     analysis.workType === "suspicious" ||
-    analysis.workType === "system" ||
     analysis.workType === "vendor"
   ) {
+    return false;
+  }
+
+  if (
+    operationalReviewSignals &&
+    analysis.actionability === "review_needed"
+  ) {
+    return true;
+  }
+
+  if (analysis.workType === "system") {
     return false;
   }
 

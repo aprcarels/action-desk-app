@@ -2,6 +2,7 @@ import type {
   AssignmentResolution,
   AssignmentRecord,
   CustomerMatch,
+  EmailAnalysis,
   ProcessedEmail,
   RepProfile,
   SavedCustomer,
@@ -13,6 +14,7 @@ import {
   getSavedCustomerDisplayName,
 } from "./customerSettings";
 import { findCustomerMatch } from "./customerMatching";
+import { shouldShowInCustomerServiceQueue } from "./customerServiceMail";
 
 export const ASSIGNED_REP_MISSING_LABEL = "Assigned Rep Missing";
 
@@ -158,6 +160,54 @@ function findCustomerOwnershipMatch(
   };
 }
 
+function isOperationalLogisticsIntent(
+  intent?: EmailAnalysis["intent"],
+): boolean {
+  return (
+    intent === "operational_logistics_scheduling" ||
+    intent === "routing_coordination" ||
+    intent === "carrier_pickup_scheduling" ||
+    intent === "missed_pickups_report" ||
+    intent === "operational_exception"
+  );
+}
+
+function hasKnownCustomerOwner(ownershipMatch?: CustomerOwnershipMatch): boolean {
+  return ownershipMatch
+    ? getCustomerOwnerRepIds(ownershipMatch.customer).length > 0
+    : false;
+}
+
+function requiresKeptQueueOwnershipGate(item: ProcessedEmail): boolean {
+  const analysis = item.result?.analysis;
+
+  if (!analysis) {
+    return false;
+  }
+
+  if (isOperationalLogisticsIntent(analysis.intent)) {
+    return false;
+  }
+
+  const nonCustomerWork =
+    Boolean(analysis.workType) &&
+    analysis.workType !== "customer_support" &&
+    analysis.workType !== "unknown";
+
+  return nonCustomerWork || analysis.actionability === "no_action_needed";
+}
+
+function canUseAutoOwnershipAssignment(
+  item: ProcessedEmail,
+  ownershipMatch?: CustomerOwnershipMatch,
+): boolean {
+  if (!requiresKeptQueueOwnershipGate(item)) {
+    return true;
+  }
+
+  return hasKnownCustomerOwner(ownershipMatch) && shouldShowInCustomerServiceQueue(item);
+}
+
 function getCustomerAssignmentSource(
   matchedOn: CustomerMatch["matchedOn"],
 ): AssignmentResolution["assignmentSource"] {
@@ -228,7 +278,16 @@ export function resolveCanonicalAssignment({
     });
   }
 
-  if (threadState?.autoAssignment) {
+  const ownershipMatch = findCustomerOwnershipMatch(
+    representativeItem,
+    customers,
+  );
+  const canAutoAssignFromOwnership = canUseAutoOwnershipAssignment(
+    representativeItem,
+    ownershipMatch,
+  );
+
+  if (threadState?.autoAssignment && canAutoAssignFromOwnership) {
     return buildRecordAssignmentResolution({
       assignmentSource: "persisted",
       assignment: threadState.autoAssignment,
@@ -237,12 +296,7 @@ export function resolveCanonicalAssignment({
     });
   }
 
-  const ownershipMatch = findCustomerOwnershipMatch(
-    representativeItem,
-    customers,
-  );
-
-  if (ownershipMatch) {
+  if (ownershipMatch && canAutoAssignFromOwnership) {
     return buildCustomerAssignmentResolution({
       ownershipMatch,
       reps,

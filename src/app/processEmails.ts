@@ -12,6 +12,7 @@ import type {
   EmailItem,
   IntentCode,
   ProcessedEmail,
+  QueueWorkView,
   SavedCustomer,
 } from "../types/actionDesk";
 
@@ -25,6 +26,7 @@ export type QueueFilters = {
   intent: IntentCode | "all";
   customerPriority: CustomerPriorityFilter;
   queueView?: "customer_service" | "all_inbox";
+  workView?: QueueWorkView;
 };
 
 type ProcessEmailsProgressivelyOptions = {
@@ -416,17 +418,96 @@ export function sortProcessedEmails(items: ProcessedEmail[]): ProcessedEmail[] {
   });
 }
 
+function isReplyRecommended(item: ProcessedEmail): boolean {
+  return (
+    item.status === "processed" &&
+    Boolean(
+      item.result?.analysis.replyNeeded === "yes" ||
+        item.result?.analysis.replyNeeded === "recommended",
+    )
+  );
+}
+
+function isReviewNeeded(item: ProcessedEmail): boolean {
+  return (
+    item.status === "processed" &&
+    item.result?.analysis.actionability === "review_needed"
+  );
+}
+
+function isOperationalExceptionItem(item: ProcessedEmail): boolean {
+  if (item.status !== "processed" || !item.result) {
+    return false;
+  }
+
+  const intent = item.result.analysis.intent;
+
+  return (
+    intent === "missed_pickups_report" ||
+    intent === "operational_exception" ||
+    intent === "operational_logistics_scheduling" ||
+    intent === "routing_coordination" ||
+    intent === "carrier_pickup_scheduling"
+  );
+}
+
+function isNoActionOrSuppressedItem(item: ProcessedEmail): boolean {
+  if (isSuppressibleSystemReportMissingBodyFailure(item)) {
+    return true;
+  }
+
+  if (item.status !== "processed" || !item.result) {
+    return false;
+  }
+
+  const analysis = item.result.analysis;
+
+  return (
+    analysis.actionability === "no_action_needed" ||
+    analysis.workType === "vendor" ||
+    analysis.workType === "suspicious" ||
+    analysis.workType === "system" ||
+    !shouldShowInCustomerServiceQueue(item)
+  );
+}
+
+function matchesQueueWorkView(
+  item: ProcessedEmail,
+  workView: QueueWorkView,
+): boolean {
+  switch (workView) {
+    case "needs_reply":
+      return isReplyRecommended(item);
+    case "review_needed":
+      return isReviewNeeded(item);
+    case "operational_exceptions":
+      return isOperationalExceptionItem(item);
+    case "no_action_suppressed":
+      return isNoActionOrSuppressedItem(item);
+    case "all_processed":
+      return item.status === "processed";
+    case "work_queue":
+    default:
+      return true;
+  }
+}
+
 export function filterProcessedEmails(
   items: ProcessedEmail[],
   filters: QueueFilters,
 ): ProcessedEmail[] {
   const query = filters.searchQuery.trim().toLowerCase();
+  const workView = filters.workView ?? "work_queue";
+  const shouldBypassCustomerServiceQueue =
+    workView === "all_processed" || workView === "no_action_suppressed";
 
   return items.filter((item) => {
     const matchesQueueView =
+      shouldBypassCustomerServiceQueue ||
       filters.queueView !== "customer_service" ||
       (!isSuppressibleSystemReportMissingBodyFailure(item) &&
         shouldShowInCustomerServiceQueue(item));
+    const matchesWorkView = matchesQueueWorkView(item, workView);
 
     const matchesUrgency =
       filters.urgency === "all" ||
@@ -447,6 +528,7 @@ export function filterProcessedEmails(
 
     return (
       matchesQueueView &&
+      matchesWorkView &&
       matchesUrgency &&
       matchesIntent &&
       matchesCustomerPriority &&

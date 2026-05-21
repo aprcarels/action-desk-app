@@ -6,6 +6,9 @@ function isOperationalLogisticsIntent(intent) {
         intent === "routing_coordination" ||
         intent === "carrier_pickup_scheduling");
 }
+function isOperationalExceptionIntent(intent) {
+    return intent === "missed_pickups_report" || intent === "operational_exception";
+}
 function computePriorityScore(analysis, orderContext) {
     let score = 0;
     const breakdown = [];
@@ -77,6 +80,11 @@ function computePriorityScore(analysis, orderContext) {
     if (isOperationalLogisticsIntent(analysis.intent)) {
         addPoints("Operational logistics scheduling", 15);
     }
+    if (isOperationalExceptionIntent(analysis.intent)) {
+        addPoints(analysis.intent === "missed_pickups_report"
+            ? "Missed pickup operational review"
+            : "Operational exception review", 20);
+    }
     if (analysis.hasConfirmationRequest && analysis.hasLogisticsContext) {
         addPoints("Current logistics confirmation ask", 15);
     }
@@ -90,6 +98,8 @@ function computePriorityScore(analysis, orderContext) {
         analysis.intent === "cancellation_request" ||
         analysis.intent === "damaged_shipment" ||
         analysis.intent === "short_shipment" ||
+        analysis.intent === "missed_pickups_report" ||
+        analysis.intent === "operational_exception" ||
         analysis.intent === "operational_confirmation" ||
         analysis.intent === "where_is_my_order") {
         addPoints("Customer-impacting issue type", 10);

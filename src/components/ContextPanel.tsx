@@ -15,6 +15,7 @@ import {
 import { getPriorityExplanationReasons } from "../services/priorityExplanation";
 import { getAnalysisSourceDisclosure } from "../services/sourceDisclosure";
 import { formatAiConfidence } from "../services/aiEmailClassification";
+import { getAssistiveAiTaskSuggestion } from "../services/taskReviewLabels";
 import type {
   AssignmentReason,
   PilotQueueItemState,
@@ -162,6 +163,7 @@ export function ContextPanel({
     item.result?.analysisSource,
   );
   const aiClassification = item.result?.aiClassification;
+  const aiTaskSuggestion = getAssistiveAiTaskSuggestion(aiClassification);
 
   return (
     <aside
@@ -425,7 +427,11 @@ export function ContextPanel({
           {aiClassification && (
             <Field
               label="AI Assisted"
-              value={`${aiClassification.category} | ${formatAiConfidence(aiClassification.confidence)} confidence`}
+              value={
+                aiTaskSuggestion
+                  ? `${aiClassification.category} | ${formatAiConfidence(aiClassification.confidence)} confidence | ${aiTaskSuggestion}`
+                  : `${aiClassification.category} | ${formatAiConfidence(aiClassification.confidence)} confidence`
+              }
             />
           )}
           <Field label="Intent" value={getIntentLabel(item.result?.analysis.intent ?? "general_support")} emphasized={true} />

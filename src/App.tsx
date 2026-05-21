@@ -85,6 +85,7 @@ import {
   calculateWorkflowMetrics,
   calculateRepWorkloadSummaries,
   calculateSupervisorSummaryMetrics,
+  calculateWorkflowProcessingMetrics,
   canViewSupervisorVisibility,
   flattenRepGroupedQueueSections,
   filterWorkflowThreads,
@@ -175,6 +176,7 @@ import type {
   PilotUsefulnessFeedback,
   ProcessedEmail,
   QueueScopeView,
+  QueueWorkView,
   RepProfile,
   SavedCustomer,
   SavedCustomerDraft,
@@ -765,6 +767,8 @@ export default function App() {
   const [queueView, setQueueView] = useState<"customer_service" | "all_inbox">(
     "customer_service",
   );
+  const [queueWorkView, setQueueWorkView] =
+    useState<QueueWorkView>("work_queue");
   const [savedCustomers, setSavedCustomers] = useState<SavedCustomer[]>([]);
   const [slaSettings, setSlaSettings] = useState<SlaSettings>(() =>
     getDefaultSlaSettings(),
@@ -3084,6 +3088,7 @@ export default function App() {
       intent: intentFilter,
       customerPriority: customerPriorityFilter,
       queueView,
+      workView: queueWorkView,
     });
     const activePilotQueueItems = pilotMode
       ? queueItems.filter((item) =>
@@ -3093,13 +3098,37 @@ export default function App() {
         ),
       )
       : queueItems;
+    const workViewBypassesCustomerServiceScope =
+      queueWorkView === "all_processed" ||
+      queueWorkView === "no_action_suppressed";
     const queueScopeItems =
-      queueView === "customer_service"
+      queueView === "customer_service" && !workViewBypassesCustomerServiceScope
         ? activePilotQueueItems.filter((item) =>
           shouldShowInCustomerServiceQueue(item) &&
           !isSuppressibleSystemReportMissingBodyFailure(item),
         )
         : activePilotQueueItems;
+    const queueWorkViewCounts = ([
+      "work_queue",
+      "needs_reply",
+      "review_needed",
+      "operational_exceptions",
+      "no_action_suppressed",
+      "all_processed",
+    ] as const).reduce(
+      (counts, workView) => ({
+        ...counts,
+        [workView]: filterProcessedEmails(activePilotQueueItems, {
+          searchQuery: "",
+          urgency: "all",
+          intent: "all",
+          customerPriority: "all",
+          queueView,
+          workView,
+        }).length,
+      }),
+      {} as Record<QueueWorkView, number>,
+    );
     const queueViewFilteredItems = pilotMode
       ? filteredQueueItems.filter((item) =>
         shouldShowPilotQueueItemInView(
@@ -3132,7 +3161,8 @@ export default function App() {
           currentRep,
         )
       : workflowState.preferences.queueScopeView;
-    const bypassAssignmentScope = queueView === "all_inbox";
+    const bypassAssignmentScope =
+      queueView === "all_inbox" || workViewBypassesCustomerServiceScope;
     // TODO: Backend ticket ingestion exists, but this visible feed still builds
     // from inbox/mock/persisted queue items plus shared workflow settings. Add a
     // ticket-feed adapter at this boundary before switching cards to backend tickets.
@@ -3224,6 +3254,43 @@ export default function App() {
           scopedThreads: scopedWorkflowThreads,
           now,
         });
+    const hiddenByPilotState = pilotMode
+      ? Math.max(0, queueItems.length - activePilotQueueItems.length)
+      : 0;
+    const hiddenByStatusFilter = Math.max(
+      0,
+      roleScopedWorkflowThreads.length - statusScopedWorkflowThreads.length,
+    );
+    const unassignedItemCount = assignmentSyncThreads.reduce(
+      (count, thread) =>
+        count +
+        (thread.assignmentResolution.assignmentStatus === "unassigned"
+          ? thread.items.length
+          : 0),
+      0,
+    );
+    const assignedReviewNeededItemCount = assignmentSyncThreads.reduce(
+      (count, thread) => {
+        if (thread.assignmentResolution.assignmentStatus === "unassigned") {
+          return count;
+        }
+
+        return count + thread.items.filter(
+          (item) =>
+            item.status === "processed" &&
+            item.result?.analysis.actionability === "review_needed",
+        ).length;
+      },
+      0,
+    );
+    const processingMetrics = calculateWorkflowProcessingMetrics(queueItems, {
+      totalLoaded: queueItems.length,
+      visibleQueueItems: visibleThreads.length,
+      hiddenByPilotState,
+      hiddenByStatusFilter,
+      unassignedItems: unassignedItemCount,
+      assignedReviewNeededItems: assignedReviewNeededItemCount,
+    });
     const repWorkloads = calculateRepWorkloadSummaries({
       threads: roleScopedWorkflowThreads,
       reps: workloadVisibleReps,
@@ -3306,6 +3373,7 @@ export default function App() {
       workflowThreads.length,
       scopedWorkflowThreads.length,
       visibleThreads.length,
+      queueWorkView,
       persistedThreadCount,
       queueView,
       safeQueueScopeView,
@@ -3336,6 +3404,7 @@ export default function App() {
       showProblemsOnly ||
       activeIssueFilter !== null ||
       queueView !== "customer_service" ||
+      queueWorkView !== "work_queue" ||
       (pilotMode && pilotQueueView !== "active") ||
       (supervisorVisibilityEnabled && supervisorQuickFilter !== "all");
     const pilotEmptyStateMessage =
@@ -3583,11 +3652,25 @@ export default function App() {
         scopedThreadCount: scopedWorkflowThreads.length,
         roleScopedThreadCount: roleScopedWorkflowThreads.length,
         queueView,
+        queueWorkView,
         queueScopeView: safeQueueScopeView,
         assignmentScopeBypassed: bypassAssignmentScope,
         statusFilter: workflowState.preferences.statusFilter,
         showSnoozed: workflowState.preferences.showSnoozed,
         supervisorQuickFilter,
+        loadedEmails: processingMetrics.totalLoaded,
+        processedEmails: processingMetrics.totalProcessed,
+        visibleQueueItems: processingMetrics.visibleQueueItems,
+        hiddenByPilotState: processingMetrics.hiddenByPilotState,
+        hiddenByStatusFilter: processingMetrics.hiddenByStatusFilter,
+        hiddenAsVendorSpamNoise: processingMetrics.hiddenAsVendorSpamNoise,
+        hiddenAsNoAction: processingMetrics.hiddenAsNoAction,
+        replyRecommended: processingMetrics.replyRecommended,
+        reviewNeeded: processingMetrics.reviewNeeded,
+        operationalExceptions: processingMetrics.operationalExceptions,
+        reviewNeededOperationalItems: processingMetrics.reviewNeededOperationalItems,
+        unassignedItems: processingMetrics.unassignedItems,
+        assignedReviewNeededItems: processingMetrics.assignedReviewNeededItems,
         currentRepId: currentRep?.id,
         currentRepRole: currentRep?.role,
         currentRepLocationId: currentRep?.locationId,
@@ -4355,6 +4438,7 @@ export default function App() {
             atRisk={workflowMetrics.atRisk}
             resolvedToday={workflowMetrics.resolvedToday}
             snoozed={workflowMetrics.snoozed}
+            processingMetrics={processingMetrics}
             showSnoozed={workflowState.preferences.showSnoozed}
           />
 
@@ -4388,6 +4472,8 @@ export default function App() {
                 pilotQueueView={pilotQueueView}
                 queueDisplayMode={safeQueueDisplayMode}
                 queueView={queueView}
+                queueWorkView={queueWorkView}
+                queueWorkViewCounts={queueWorkViewCounts}
                 showProblemsOnly={showProblemsOnly}
                 isLoadingInbox={isLoadingInbox || loading}
                 isLoadingMore={isLoadingMore}
@@ -4419,6 +4505,7 @@ export default function App() {
                 }}
                 onPilotQueueViewChange={setPilotQueueView}
                 onQueueViewChange={setQueueView}
+                onQueueWorkViewChange={setQueueWorkView}
                 onSearchQueryChange={setSearchQuery}
                 onUrgencyFilterChange={setUrgencyFilter}
                 onIntentFilterChange={setIntentFilter}

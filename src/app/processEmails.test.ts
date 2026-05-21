@@ -177,6 +177,217 @@ describe("filterProcessedEmails", () => {
     expect(filtered).toHaveLength(2);
   });
 
+  it("keeps no-reply operational review work visible in default and review views", () => {
+    const operationalReview = buildProcessedEmail({
+      email: {
+        ...buildProcessedEmail().email,
+        id: "missed-pickups",
+        senderEmail: "shipping@apexpress.com",
+        subject: "MISSED PICKUPS 5/20/2026",
+        body: "Attached are the missed pickups for tonight.",
+      },
+      result: {
+        ...buildProcessedEmail().result!,
+        analysis: {
+          ...buildProcessedEmail().result!.analysis,
+          intent: "missed_pickups_report",
+          urgency: "high",
+          actionability: "review_needed",
+          replyNeeded: "no",
+          workType: "customer_support",
+          messageType: "internal_alert",
+          nextAction:
+            "Review missed pickup list, confirm affected shipments/customers, and assign follow-up where needed.",
+        },
+        replyDraft: "",
+        priorityScore: 55,
+      },
+    });
+
+    expect(
+      filterProcessedEmails([operationalReview], {
+        searchQuery: "",
+        urgency: "all",
+        intent: "all",
+        customerPriority: "all",
+        queueView: "customer_service",
+        workView: "work_queue",
+      }).map((item) => item.email.id),
+    ).toEqual(["missed-pickups"]);
+    expect(
+      filterProcessedEmails([operationalReview], {
+        searchQuery: "",
+        urgency: "all",
+        intent: "all",
+        customerPriority: "all",
+        queueView: "customer_service",
+        workView: "review_needed",
+      }).map((item) => item.email.id),
+    ).toEqual(["missed-pickups"]);
+    expect(
+      filterProcessedEmails([operationalReview], {
+        searchQuery: "",
+        urgency: "all",
+        intent: "all",
+        customerPriority: "all",
+        queueView: "customer_service",
+        workView: "operational_exceptions",
+      }).map((item) => item.email.id),
+    ).toEqual(["missed-pickups"]);
+  });
+
+  it("lets audit views reveal suppressed and no-action processed items", () => {
+    const replyItem = buildProcessedEmail();
+    const vendorItem = buildProcessedEmail({
+      email: {
+        ...buildProcessedEmail().email,
+        id: "vendor-sales",
+        senderEmail: "sales@vendor.example",
+        subject: "Logistics software demo",
+        body: "Can I show you a demo of our logistics platform?",
+      },
+      result: {
+        ...buildProcessedEmail().result!,
+        analysis: {
+          ...buildProcessedEmail().result!.analysis,
+          intent: "general_support",
+          urgency: "low",
+          actionability: "no_action_needed",
+          replyNeeded: "no",
+          workType: "vendor",
+          risks: [],
+        },
+        replyDraft: "",
+        priorityScore: 0,
+      },
+    });
+
+    expect(
+      filterProcessedEmails([replyItem, vendorItem], {
+        searchQuery: "",
+        urgency: "all",
+        intent: "all",
+        customerPriority: "all",
+        queueView: "customer_service",
+        workView: "work_queue",
+      }).map((item) => item.email.id),
+    ).toEqual(["email-1"]);
+    expect(
+      filterProcessedEmails([replyItem, vendorItem], {
+        searchQuery: "",
+        urgency: "all",
+        intent: "all",
+        customerPriority: "all",
+        queueView: "customer_service",
+        workView: "no_action_suppressed",
+      }).map((item) => item.email.id),
+    ).toEqual(["vendor-sales"]);
+    expect(
+      filterProcessedEmails([replyItem, vendorItem], {
+        searchQuery: "",
+        urgency: "all",
+        intent: "all",
+        customerPriority: "all",
+        queueView: "customer_service",
+        workView: "all_processed",
+      }).map((item) => item.email.id),
+    ).toEqual(["email-1", "vendor-sales"]);
+  });
+
+  it("does not collapse a mixed inbox to only reply-needed items", () => {
+    const replyItems = Array.from({ length: 10 }, (_, index) =>
+      buildProcessedEmail({
+        email: {
+          ...buildProcessedEmail().email,
+          id: `reply-${index + 1}`,
+          senderEmail: `customer-${index + 1}@example.com`,
+        },
+      }),
+    );
+    const reviewItems = Array.from({ length: 10 }, (_, index) =>
+      buildProcessedEmail({
+        email: {
+          ...buildProcessedEmail().email,
+          id: `review-${index + 1}`,
+          senderEmail: `ops-${index + 1}@apexpress.com`,
+          subject: `MISSED PICKUPS batch ${index + 1}`,
+          body: "Attached are the missed pickups for tonight.",
+        },
+        result: {
+          ...buildProcessedEmail().result!,
+          analysis: {
+            ...buildProcessedEmail().result!.analysis,
+            intent: "missed_pickups_report",
+            urgency: "high",
+            actionability: "review_needed",
+            replyNeeded: "no",
+            workType: "customer_support",
+            messageType: "internal_alert",
+            nextAction:
+              "Review missed pickup list, confirm affected shipments/customers, and assign follow-up where needed.",
+          },
+          replyDraft: "",
+          priorityScore: 55,
+        },
+      }),
+    );
+    const suppressedItems = Array.from({ length: 5 }, (_, index) =>
+      buildProcessedEmail({
+        email: {
+          ...buildProcessedEmail().email,
+          id: `suppressed-${index + 1}`,
+          senderEmail: `sales-${index + 1}@vendor.example`,
+          subject: "Sales outreach",
+        },
+        result: {
+          ...buildProcessedEmail().result!,
+          analysis: {
+            ...buildProcessedEmail().result!.analysis,
+            intent: "general_support",
+            urgency: "low",
+            actionability: "no_action_needed",
+            replyNeeded: "no",
+            workType: "vendor",
+            risks: [],
+          },
+          replyDraft: "",
+          priorityScore: 0,
+        },
+      }),
+    );
+    const items = [...replyItems, ...reviewItems, ...suppressedItems];
+
+    const defaultQueue = filterProcessedEmails(items, {
+      searchQuery: "",
+      urgency: "all",
+      intent: "all",
+      customerPriority: "all",
+      queueView: "customer_service",
+      workView: "work_queue",
+    });
+    const needsReply = filterProcessedEmails(items, {
+      searchQuery: "",
+      urgency: "all",
+      intent: "all",
+      customerPriority: "all",
+      queueView: "customer_service",
+      workView: "needs_reply",
+    });
+    const reviewNeeded = filterProcessedEmails(items, {
+      searchQuery: "",
+      urgency: "all",
+      intent: "all",
+      customerPriority: "all",
+      queueView: "customer_service",
+      workView: "review_needed",
+    });
+
+    expect(items).toHaveLength(25);
+    expect(defaultQueue).toHaveLength(20);
+    expect(needsReply).toHaveLength(10);
+    expect(reviewNeeded).toHaveLength(10);
+  });
+
   it("suppresses missing-body system report failures from the customer-service view", () => {
     const systemReportFailure = buildProcessedEmail({
       email: {
@@ -277,9 +488,12 @@ describe("filterProcessedEmails", () => {
 describe("processEmails", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
   });
 
   it("uses subject and sender fallback for empty-body Graph system reports", async () => {
+    vi.stubEnv("VITE_AI_CLASSIFICATION_ENABLED", "false");
+    vi.stubEnv("VITE_AI_REPLY_DRAFTS_ENABLED", "false");
     const infoSpy = vi.spyOn(console, "info").mockImplementation(() => undefined);
 
     const processedItems = await processEmails([

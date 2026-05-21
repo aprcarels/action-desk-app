@@ -17,6 +17,10 @@ function isOperationalLogisticsIntent(intent: EmailAnalysis["intent"]): boolean 
   );
 }
 
+function isOperationalExceptionIntent(intent: EmailAnalysis["intent"]): boolean {
+  return intent === "missed_pickups_report" || intent === "operational_exception";
+}
+
 export function computePriorityScore(
   analysis: EmailAnalysis,
   orderContext?: OrderContext,
@@ -94,6 +98,15 @@ export function computePriorityScore(
     addPoints("Operational logistics scheduling", 15);
   }
 
+  if (isOperationalExceptionIntent(analysis.intent)) {
+    addPoints(
+      analysis.intent === "missed_pickups_report"
+        ? "Missed pickup operational review"
+        : "Operational exception review",
+      20,
+    );
+  }
+
   if (analysis.hasConfirmationRequest && analysis.hasLogisticsContext) {
     addPoints("Current logistics confirmation ask", 15);
   }
@@ -111,6 +124,8 @@ export function computePriorityScore(
     analysis.intent === "cancellation_request" ||
     analysis.intent === "damaged_shipment" ||
     analysis.intent === "short_shipment" ||
+    analysis.intent === "missed_pickups_report" ||
+    analysis.intent === "operational_exception" ||
     analysis.intent === "operational_confirmation" ||
     analysis.intent === "where_is_my_order"
   ) {

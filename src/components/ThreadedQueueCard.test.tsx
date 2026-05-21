@@ -153,6 +153,48 @@ describe("ThreadedQueueCard SLA display", () => {
     expect(markup).not.toContain("Unassigned");
   });
 
+  it("renders operational logistics review labels and AI task suggestions when available", () => {
+    const item: ProcessedEmail = {
+      ...buildProcessedEmail(),
+      result: {
+        ...buildProcessedEmail().result!,
+        analysis: {
+          ...buildProcessedEmail().result!.analysis,
+          intent: "operational_logistics_scheduling",
+          actionability: "review_needed",
+          replyNeeded: "no",
+          nextAction:
+            "Review pickup/scheduling details. Reply only if schedule conflict or missing pickup details.",
+        },
+        aiClassification: {
+          category: "operational logistics scheduling",
+          actionable: true,
+          urgency: "medium",
+          summary: "Pickup scheduling notice for review.",
+          taskSuggestion: "Check pickup window against warehouse availability.",
+          confidence: 0.84,
+          aiSource: "ollama",
+        },
+        replyDraft: "",
+      },
+    };
+    const markup = renderToStaticMarkup(
+      <ThreadedQueueCard
+        thread={buildThread(item)}
+        now={new Date("2026-04-21T12:00:00.000Z")}
+        isSelected={false}
+        onSelect={vi.fn()}
+        onTakeThread={vi.fn()}
+        onRetryEmail={vi.fn()}
+      />,
+    );
+
+    expect(markup).toContain("Review pickup/scheduling details");
+    expect(markup).toContain("Reply only if schedule conflict or missing pickup details");
+    expect(markup).toContain("AI task: Check pickup window against warehouse availability.");
+    expect(markup).toContain("Assistive only. Action Desk rules remain authoritative.");
+  });
+
   it("renders missing-body system reports without failed or retry treatment", () => {
     const item: ProcessedEmail = {
       ...buildProcessedEmail(),

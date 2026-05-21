@@ -15,6 +15,10 @@ import {
   isSystemReportEmailItem,
 } from "../services/systemReportEmail";
 import { formatAiConfidence } from "../services/aiEmailClassification";
+import {
+  getAssistiveAiTaskSuggestion,
+  getReviewTaskLabels,
+} from "../services/taskReviewLabels";
 import type {
   AssignmentReason,
   WorkflowThread,
@@ -71,6 +75,10 @@ function getPriorityAccent(thread: WorkflowThread): {
   };
 }
 
+function truncateInlineText(value: string, maxLength: number): string {
+  return value.length > maxLength ? `${value.slice(0, maxLength - 1)}...` : value;
+}
+
 export function ThreadedQueueCard({
   thread,
   now,
@@ -84,6 +92,8 @@ export function ThreadedQueueCard({
   const representativeItem = thread.representativeItem;
   const analysis = representativeItem.result?.analysis;
   const aiClassification = representativeItem.result?.aiClassification;
+  const reviewTaskLabels = getReviewTaskLabels(analysis);
+  const aiTaskSuggestion = getAssistiveAiTaskSuggestion(aiClassification);
   const analysisSourceDisclosure = getAnalysisSourceDisclosure(
     representativeItem.result?.analysisSource,
   );
@@ -317,6 +327,19 @@ export function ThreadedQueueCard({
                   AI: {aiClassification.category} ({formatAiConfidence(aiClassification.confidence)})
                 </span>
               )}
+              {reviewTaskLabels.map((label) => (
+                <span key={label} style={taskBadgeStyle}>
+                  {label}
+                </span>
+              ))}
+              {aiTaskSuggestion && (
+                <span
+                  title={`AI suggested task, assistive only: ${aiTaskSuggestion}`}
+                  style={aiTaskBadgeStyle}
+                >
+                  AI task: {truncateInlineText(aiTaskSuggestion, 72)}
+                </span>
+              )}
             </>
           )}
           <span
@@ -426,6 +449,18 @@ const badgeStyle: React.CSSProperties = {
   backgroundColor: "#e2e8f0",
   borderRadius: "999px",
   padding: "4px 8px",
+};
+
+const taskBadgeStyle: React.CSSProperties = {
+  ...badgeStyle,
+  backgroundColor: "#dcfce7",
+  color: "#166534",
+};
+
+const aiTaskBadgeStyle: React.CSSProperties = {
+  ...badgeStyle,
+  backgroundColor: "#dbeafe",
+  color: "#1d4ed8",
 };
 
 const secondaryButtonStyle: React.CSSProperties = {

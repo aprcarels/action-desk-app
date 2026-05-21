@@ -18,7 +18,7 @@ Your job is to identify:
 Return JSON with exactly these fields:
 {
   "summary": string,
-  "intent": "where_is_my_order" | "pod_request" | "cancellation_request" | "short_shipment" | "damaged_shipment" | "address_change" | "billing_question" | "operational_confirmation" | "operational_logistics_scheduling" | "routing_coordination" | "carrier_pickup_scheduling" | "general_support",
+  "intent": "where_is_my_order" | "pod_request" | "cancellation_request" | "short_shipment" | "damaged_shipment" | "address_change" | "billing_question" | "missed_pickups_report" | "operational_exception" | "operational_confirmation" | "operational_logistics_scheduling" | "routing_coordination" | "carrier_pickup_scheduling" | "general_support",
   "urgency": "low" | "medium" | "high",
   "confidence": "low" | "medium" | "high",
   "orderNumber": string | null,
@@ -34,6 +34,8 @@ Instructions:
 - Use "general_support" for vendor sales outreach, cold outreach, demo requests, pricing/ROI pitches, or messages pitching a product/service. Do not infer "where_is_my_order" from sales language about numbers, recovery, logistics, tracking, devices, shipping, or cost unless the sender clearly asks for help with their own order or shipment.
 - Use "general_support" for internal EOD/status reports, Excel tracking summaries, orders-on-track rollups, or rollover-to-tomorrow notes. These are internal operational updates, not customer order-status requests, unless the latest message clearly asks customer service to act.
 - Use "operational_logistics_scheduling" for scheduled loads, MPU/Multi Pick Up notices, stop times, carrier pickup dates, pickup numbers, CDD, TONU/OTIF warnings, routing status, or loading/transit timing details.
+- Use "missed_pickups_report" for missed pickups, failed pickup lists, pickup not completed, driver did not check in, not picked up, or attached missed pickup reports.
+- Use "operational_exception" for shipment exceptions, pickup exceptions, routing/scheduling issues, failed pickups, carrier exceptions, or operational exceptions that need review but do not need a customer reply by default.
 - Use "routing_coordination" or "carrier_pickup_scheduling" only when those are the clearest specific fit.
 - Do not use "billing_question" just because a scheduling/routing email says charges, fees, TONU, or OTIF may apply. Use billing only when the sender actually asks about billing, refund, payment, invoice, credit, or a charge discrepancy.
 - For risks, prefer these normalized values when relevant: "delay_or_no_tracking_update", "customer_frustration", "delivered_not_received", "pod_needed", "cancellation_review_needed", "missing_items_reported", "damage_reported", "address_correction_needed", "duplicate_shipment_possible", "billing_discrepancy".

@@ -144,4 +144,23 @@ describe("computePriorityScore", () => {
     expect(score.score).toBeGreaterThanOrEqual(40);
     expect(score.score).toBeLessThan(70);
   });
+
+  it("keeps missed pickup review work visible in the medium-priority band without a reply", () => {
+    const score = computePriorityScore(
+      buildAnalysis({
+        intent: "missed_pickups_report",
+        urgency: "medium",
+        actionability: "review_needed",
+        replyNeeded: "no",
+        hasClearRequest: false,
+        hasLogisticsContext: true,
+        hasOperationalTimingSignal: true,
+        workType: "customer_support",
+        messageType: "internal_alert",
+      }),
+    );
+
+    expect(score.score).toBeGreaterThanOrEqual(40);
+    expect(score.score).toBeLessThan(70);
+  });
 });

@@ -18,8 +18,11 @@ import {
   hasActualBillingQuestion,
   getLatestUrgencySignal,
   hasConfirmationRequest,
+  hasCustomerFollowUpRequest,
   hasClearRequest,
   hasLogisticsCoordinationSignals,
+  hasMissedPickupSignals,
+  hasOperationalExceptionSignals,
   hasOperationalLogisticsFailureOrEscalationSignals,
   hasOperationalLogisticsScheduleConflict,
   hasOperationalLogisticsSchedulingSignals,
@@ -120,6 +123,14 @@ function isOperationalLogisticsIntent(intent: IntentCode): boolean {
   );
 }
 
+function isOperationalExceptionIntent(intent: IntentCode): boolean {
+  return intent === "missed_pickups_report" || intent === "operational_exception";
+}
+
+function isOperationalReviewIntent(intent: IntentCode): boolean {
+  return isOperationalLogisticsIntent(intent) || isOperationalExceptionIntent(intent);
+}
+
 function getWorkType(options: {
   normalizedEmail: string;
   likelyAutomatedAlert: boolean;
@@ -127,6 +138,7 @@ function getWorkType(options: {
   hasExplicitRequest: boolean;
   isInternalOperations: boolean;
   isVendorSalesOutreach: boolean;
+  isOperationalReview: boolean;
   analysis: EmailAnalysis;
 }): WorkType {
   if (includesAny(options.normalizedEmail, SUSPICIOUS_PATTERNS)) {
@@ -135,6 +147,10 @@ function getWorkType(options: {
 
   if (options.isVendorSalesOutreach) {
     return "vendor";
+  }
+
+  if (options.isOperationalReview) {
+    return "customer_support";
   }
 
   if (
@@ -280,6 +296,7 @@ function getRefinedUrgency(options: {
   hasLogisticsContext: boolean;
   hasOperationalTimingSignal: boolean;
   isOperationalLogisticsScheduling: boolean;
+  isOperationalExceptionReview: boolean;
   hasOperationalLogisticsFailureOrEscalation: boolean;
 }): EmailAnalysis["urgency"] {
   const latestUrgencySignal = getLatestUrgencySignal(options.latestMessageText);
@@ -297,6 +314,14 @@ function getRefinedUrgency(options: {
   const isActionableCustomerRequest =
     options.analysis.workType === "customer_support" &&
     options.actionability === "action_required";
+
+  if (options.isOperationalExceptionReview) {
+    return latestUrgencySignal === "high" ||
+      options.hasOperationalTimingSignal ||
+      options.hasOperationalLogisticsFailureOrEscalation
+      ? "high"
+      : "medium";
+  }
 
   if (
     options.actionability === "no_action_needed" ||
@@ -388,6 +413,8 @@ function getRefinedSummary(options: {
   isThreadContinuation: boolean;
   isInternalOperationalReport: boolean;
   isOperationalLogisticsScheduling: boolean;
+  isMissedPickupReport: boolean;
+  isOperationalExceptionReview: boolean;
 }): string {
   if (options.analysis.workType === "vendor") {
     return "Vendor sales outreach or account-maintenance message. Not a customer-service case.";
@@ -417,6 +444,14 @@ function getRefinedSummary(options: {
     return options.actionability === "action_required"
       ? "Operational logistics scheduling or routing email needs pickup timing review before a reply."
       : "Operational logistics scheduling or routing email. Review pickup details and reply only if alternate scheduling is needed.";
+  }
+
+  if (options.isMissedPickupReport) {
+    return "Missed pickup report needs operational review and follow-up assignment for affected shipments or customers.";
+  }
+
+  if (options.isOperationalExceptionReview) {
+    return "Operational exception needs review to confirm impacted shipments, customers, or follow-up owners.";
   }
 
   if (
@@ -490,12 +525,18 @@ export function refineEmailAnalysis(email: string, analysis: EmailAnalysis): Ema
     isVendorSalesOutreach(normalizedLatestMessage) ||
     isVendorSalesOutreach(normalizedEmail);
   const likelyAutomatedAlert = includesAny(normalizedEmail, ALERT_PATTERNS);
-  const noActionNeeded =
+  const explicitNoActionNeeded =
     normalizedLatestMessage.includes("no action needed") ||
-    normalizedLatestMessage.includes("no action required") ||
+    normalizedLatestMessage.includes("no action required");
+  const noActionNeeded =
+    explicitNoActionNeeded ||
     normalizedLatestMessage.includes("do not reply");
   const hasExplicitRequest =
-    !vendorSalesOutreach && hasClearRequest(normalizedLatestMessage);
+  !vendorSalesOutreach &&
+  (
+    hasClearRequest(normalizedLatestMessage) ||
+    hasCustomerFollowUpRequest(normalizedLatestMessage)
+  );
   const awarenessOnly =
     includesAny(normalizedLatestMessage, AWARENESS_PATTERNS) && !hasExplicitRequest;
   const informational = awarenessOnly || normalizedLatestMessage.includes("for your information");
@@ -513,23 +554,54 @@ export function refineEmailAnalysis(email: string, analysis: EmailAnalysis): Ema
     hasOperationalLogisticsScheduleConflict(normalizedLatestMessage);
   const operationalLogisticsFailureOrEscalation =
     hasOperationalLogisticsFailureOrEscalationSignals(normalizedLatestMessage);
+  const missedPickupReport =
+    hasMissedPickupSignals(normalizedLatestMessage) ||
+    hasMissedPickupSignals(normalizedEmail);
+  const rawOperationalExceptionReview =
+    missedPickupReport ||
+    hasOperationalExceptionSignals(normalizedLatestMessage) ||
+    hasOperationalExceptionSignals(normalizedEmail) ||
+    isOperationalExceptionIntent(analysisWithIdentifiers.intent);
+  const operationalExceptionReview =
+    rawOperationalExceptionReview &&
+    !(explicitNoActionNeeded && likelyAutomatedAlert && !missedPickupReport);
+  const initialOperationalReviewIntent =
+    isOperationalLogisticsIntent(analysisWithIdentifiers.intent) ||
+    (isOperationalExceptionIntent(analysisWithIdentifiers.intent) &&
+      operationalExceptionReview);
+  const operationalReview =
+    operationalExceptionReview ||
+    operationalLogisticsScheduling ||
+    initialOperationalReviewIntent;
   const logisticsContext =
     hasLogisticsCoordinationSignals(normalizedLatestMessage) ||
-    operationalLogisticsScheduling;
+    operationalLogisticsScheduling ||
+    operationalExceptionReview;
   const operationalTimingSignal =
     hasShippingDeadlineRequest(normalizedLatestMessage) ||
     hasOperationalTimingSignal(normalizedLatestMessage) ||
-    operationalLogisticsScheduling;
+    operationalLogisticsScheduling ||
+    operationalExceptionReview;
   const alertLikeStatusRequest =
+    !operationalReview &&
     (likelyAutomatedAlert || isInternalOperations || isThreadContinuation) &&
-    (analysisWithIdentifiers.intent === "where_is_my_order" || analysisWithIdentifiers.intent === "general_support");
+    (
+      analysisWithIdentifiers.intent === "where_is_my_order" ||
+      analysisWithIdentifiers.intent === "general_support" ||
+      (isOperationalExceptionIntent(analysisWithIdentifiers.intent) &&
+        !operationalExceptionReview)
+    );
   const refinedIntent =
     vendorSalesOutreach || alertLikeStatusRequest
       ? "general_support"
-      : operationalLogisticsScheduling &&
-          !isOperationalLogisticsIntent(analysisWithIdentifiers.intent)
-        ? "operational_logistics_scheduling"
-        : analysisWithIdentifiers.intent;
+      : missedPickupReport
+        ? "missed_pickups_report"
+        : operationalExceptionReview && !missedPickupReport
+          ? "operational_exception"
+          : operationalLogisticsScheduling &&
+              !isOperationalReviewIntent(analysisWithIdentifiers.intent)
+            ? "operational_logistics_scheduling"
+            : analysisWithIdentifiers.intent;
   const workType = getWorkType({
     normalizedEmail,
     likelyAutomatedAlert,
@@ -537,6 +609,7 @@ export function refineEmailAnalysis(email: string, analysis: EmailAnalysis): Ema
     hasExplicitRequest,
     isInternalOperations,
     isVendorSalesOutreach: vendorSalesOutreach,
+    isOperationalReview: operationalReview,
     analysis: {
       ...analysisWithIdentifiers,
       intent: refinedIntent,
@@ -557,7 +630,7 @@ export function refineEmailAnalysis(email: string, analysis: EmailAnalysis): Ema
     likelyAutomatedAlert,
     awarenessOnly,
     noActionNeeded:
-      noActionNeeded ||
+      (!operationalReview && noActionNeeded) ||
       (workType !== "customer_support" && workType !== "unknown"),
     hasExplicitRequest,
     isThreadContinuation,
@@ -571,12 +644,17 @@ export function refineEmailAnalysis(email: string, analysis: EmailAnalysis): Ema
       intent: refinedIntent,
     },
   });
+  const refinedActionability = operationalExceptionReview
+    ? "review_needed"
+    : actionability;
   const replyNeeded =
-    (operationalLogisticsScheduling || isOperationalLogisticsIntent(refinedIntent)) &&
+    operationalExceptionReview
+      ? "no"
+      : (operationalLogisticsScheduling || isOperationalLogisticsIntent(refinedIntent)) &&
     !operationalLogisticsConflict &&
     !operationalLogisticsFailureOrEscalation
       ? "no"
-      : getReplyNeeded(actionability);
+      : getReplyNeeded(refinedActionability);
   const urgency = getRefinedUrgency({
     normalizedEmail,
     analysis: {
@@ -585,7 +663,7 @@ export function refineEmailAnalysis(email: string, analysis: EmailAnalysis): Ema
       hasClearRequest: hasExplicitRequest,
       isThreadContinuation,
     },
-    actionability,
+    actionability: refinedActionability,
     messageType,
     latestMessageText: normalizedLatestMessage,
     isThreadContinuation,
@@ -594,6 +672,7 @@ export function refineEmailAnalysis(email: string, analysis: EmailAnalysis): Ema
     hasOperationalTimingSignal: operationalTimingSignal,
     isOperationalLogisticsScheduling:
       operationalLogisticsScheduling || isOperationalLogisticsIntent(refinedIntent),
+    isOperationalExceptionReview: operationalExceptionReview,
     hasOperationalLogisticsFailureOrEscalation:
       operationalLogisticsFailureOrEscalation,
   });
@@ -604,7 +683,8 @@ export function refineEmailAnalysis(email: string, analysis: EmailAnalysis): Ema
     ? []
     : Array.from(new Set([
         ...analysisWithIdentifiers.risks.filter((risk) => (
-          isOperationalLogisticsScheduling && !hasActualBillingQuestion(normalizedLatestMessage)
+          (isOperationalLogisticsScheduling || operationalExceptionReview) &&
+            !hasActualBillingQuestion(normalizedLatestMessage)
             ? risk !== "billing_discrepancy" &&
               risk !== "customer_frustration"
             : true
@@ -628,7 +708,7 @@ export function refineEmailAnalysis(email: string, analysis: EmailAnalysis): Ema
         isThreadContinuation,
       },
       messageType,
-      actionability,
+      actionability: refinedActionability,
     }),
     risks: refinedRisks,
     summary: getRefinedSummary({
@@ -641,13 +721,15 @@ export function refineEmailAnalysis(email: string, analysis: EmailAnalysis): Ema
         isThreadContinuation,
       },
       messageType,
-      actionability,
+      actionability: refinedActionability,
       isThreadContinuation,
       isInternalOperationalReport: internalOperationalReport,
       isOperationalLogisticsScheduling,
+      isMissedPickupReport: refinedIntent === "missed_pickups_report",
+      isOperationalExceptionReview: operationalExceptionReview,
     }),
     messageType,
-    actionability,
+    actionability: refinedActionability,
     replyNeeded,
     workType,
     hasClearRequest: hasExplicitRequest,

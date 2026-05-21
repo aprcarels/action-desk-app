@@ -186,6 +186,7 @@ describe("ThreadConversationView source disclosure", () => {
           actionable: true,
           urgency: "medium",
           summary: "Customer is asking for current shipment status.",
+          taskSuggestion: "Verify order status before replying.",
           confidence: 0.86,
           aiSource: "ollama",
         },
@@ -197,7 +198,29 @@ describe("ThreadConversationView source disclosure", () => {
     expect(markup).toContain("Draft: Rules-Based");
     expect(markup).toContain("AI Assisted");
     expect(markup).toContain("order/shipment issue | 86% confidence");
+    expect(markup).toContain("AI task suggestion: Verify order status before replying.");
     expect(markup).toContain("Assistive only. Action Desk rules remain authoritative.");
+  });
+
+  it("shows operational logistics review labels next to the authoritative rules recommendation", () => {
+    const item = buildProcessedEmail(
+      buildResult({
+        analysis: {
+          ...buildResult().analysis,
+          intent: "operational_logistics_scheduling",
+          actionability: "review_needed",
+          replyNeeded: "no",
+          nextAction:
+            "Review pickup/scheduling details. Reply only if schedule conflict or missing pickup details.",
+        },
+        replyDraft: "",
+      }),
+    );
+    const markup = renderConversation(item);
+
+    expect(markup).toContain("Review pickup/scheduling details");
+    expect(markup).toContain("Reply only if schedule conflict or missing pickup details");
+    expect(markup).toContain("Reply not recommended for this message.");
   });
 
   it("shows the combined copy and open action when an exact Outlook link is available", () => {
